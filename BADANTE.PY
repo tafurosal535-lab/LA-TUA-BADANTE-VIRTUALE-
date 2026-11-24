@@ -5,7 +5,7 @@
 import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "METTI_QUI_IL_TOKEN_DEL_BOT")
 BOT_NAME = "BadanteVirtualeBot"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "METTI_PASSWORD_SEGRETA")
 MIA_EMAIL = "nostra-mail-fissa@badante.it"
@@ -346,4 +346,8 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
     app.run(host="0.0.0.0", port=port)
-        
+
+
+ 
+ 
+    
