@@ -1,6 +1,5 @@
-# BADANTE.PY - VERSIONE RENDER CORRETTA
-# Start Command su Render: gunicorn BADANTE:app --bind 0.0.0.0:$PORT
-# Attenzione: BADANTE tutto maiuscolo, se scrivi badante minuscolo Render non lo trova
+# BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA
+# Start Command su Render: python BADANTE.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
@@ -30,14 +29,18 @@ init_db()
 
 def manda_telegram(chat_id, testo, bottoni=None):
     if not BOT_TOKEN or BOT_TOKEN.startswith("METTI_"):
+        print("ERRORE: BOT_TOKEN non messo su Render!")
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": chat_id, "text": testo}
     if bottoni: data["reply_markup"] = json.dumps(bottoni)
     try:
         r = requests.post(url, json=data, timeout=10)
+        print("Manda Telegram:", r.status_code)
         return r.status_code == 200
-    except: return False
+    except Exception as e:
+        print("Errore manda_telegram:", e)
+        return False
 
 HTML = """
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>LA TUA BADANTE VIRTUALE</title>
@@ -99,7 +102,7 @@ async function salvaMessaggio(){
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
 async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:data.value,ora:ora.value})}).then(x=>x.json()); caricaLista(); }
+async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:data.value,ora:ora.value})}); caricaLista(); }
 async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
 async function cancellaTutto(){let r=await fetch('/cancella_tutto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,famiglia_id:FAMIGLIA_ID})}).then(x=>x.json()); alert(r.msg);}
 async function cambiaNumero(){let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,tipo:tipoCambio.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json()); alert(r.msg);}
@@ -260,20 +263,29 @@ def fila():
 
 def bot_loop():
     offset = 0
+    print("BOT LOOP AVVIATO - aspetto messaggi Telegram...")
     while True:
         try:
             if not BOT_TOKEN or BOT_TOKEN.startswith("METTI_"):
+                print("BOT_TOKEN mancante su Render, aspetto 10 sec...")
                 time.sleep(10); continue
             r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates", params={"offset": offset, "timeout": 30}, timeout=35).json()
+            if not r.get("ok"):
+                print("Errore Telegram getUpdates:", r)
+                time.sleep(5); continue
             for upd in r.get("result", []):
                 offset = upd["update_id"] + 1; con = db()
+                print("Ricevuto da Telegram:", upd)
                 if "message" in upd:
                     msg = upd["message"]; chat_id = msg["chat"]["id"]; testo = msg.get("text", "")
                     if testo.startswith("/start"):
                         parti = testo.split(); codice = parti[1] if len(parti) > 1 else ""
                         fam = con.execute("SELECT * FROM famiglie WHERE codice_link=?", (codice,)).fetchone() if codice else None
-                        if fam: manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo per firmare ed entrare.")
-                        else: manda_telegram(chat_id, "Ciao, premi AVVIA per iniziare.")
+                        if fam:
+                            manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo qui per firmare ed entrare.", {"inline_keyboard": [[{"text": "✅ HO CAPITO - SCRIVO IL CODICE", "callback_data": "AVVIA_START"}]]})
+                        else:
+                            # QUI ERA IL BUG: prima mandava solo testo senza pulsante
+                            manda_telegram(chat_id, "Ciao! 👋 Per entrare devi prima iscriverti sul sito.\n\n1. Vai sul sito LA TUA BADANTE VIRTUALE\n2. Scrivi nome, cognome e cell\n3. Ti arriva un CODICE di 6 cifre\n4. Scrivi qui quel codice di 6 cifre e premi INVIA", {"inline_keyboard": [[{"text": "✅ HO CAPITO", "callback_data": "AVVIA_START"}]]})
                     elif testo.isdigit() and len(testo) == 6:
                         fam = con.execute("SELECT * FROM famiglie WHERE otp=?", (testo,)).fetchone()
                         if fam:
@@ -302,7 +314,12 @@ def bot_loop():
                         if not trovato: manda_telegram(chat_id, "Numero non uguale a quello scritto. Si blocca tutto. Chiedi di controllare.")
                 if "callback_query" in upd:
                     cb = upd["callback_query"]; chat_id = cb["message"]["chat"]["id"]; data = cb["data"]
-                    if data.startswith("SI_"):
+                    # Risponde a Telegram che il pulsante è stato premuto, altrimenti resta l'orologio
+                    try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cb["id"]}, timeout=5)
+                    except: pass
+                    if data == "AVVIA_START":
+                        manda_telegram(chat_id, "Perfetto! Ora scrivi qui il tuo codice di 6 cifre che ti ha dato il sito e premi INVIA.")
+                    elif data.startswith("SI_"):
                         mid = data.split("_")[1]; con.execute("UPDATE messaggi SET risposta='SI' WHERE id=?", (mid,)); con.commit()
                         m = con.execute("SELECT * FROM messaggi WHERE id=?", (mid,)).fetchone()
                         if m:
@@ -346,8 +363,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
     app.run(host="0.0.0.0", port=port)
-
-
- 
- 
-    
