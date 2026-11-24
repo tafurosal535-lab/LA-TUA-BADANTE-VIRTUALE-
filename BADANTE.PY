@@ -4,7 +4,7 @@
 # 2. Scrivi nel terminale: pip install flask requests, os
 # 3. Scrivi: python badante.py
 # 4. Apri: http://localhost:5000
-
+import os
 import sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
 
