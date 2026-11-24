@@ -1,6 +1,3 @@
-# BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA
-# Start Command su Render: python BADANTE.PY
-
 import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
 
@@ -102,7 +99,7 @@ async function salvaMessaggio(){
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
 async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:data.value,ora:ora.value})}); caricaLista(); }
+async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:data.value,ora:ora.value})}).then(x=>x.json()); caricaLista(); }
 async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
 async function cancellaTutto(){let r=await fetch('/cancella_tutto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,famiglia_id:FAMIGLIA_ID})}).then(x=>x.json()); alert(r.msg);}
 async function cambiaNumero(){let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,tipo:tipoCambio.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json()); alert(r.msg);}
@@ -278,14 +275,17 @@ def bot_loop():
                 print("Ricevuto da Telegram:", upd)
                 if "message" in upd:
                     msg = upd["message"]; chat_id = msg["chat"]["id"]; testo = msg.get("text", "")
-                    if testo.startswith("/start"):
+                    # === FIX 1 - AVVIA SCRITTO A MANO - QUESTO MANCAVA ===
+                    if testo.strip().upper() in ["AVVIA", "AVVIA_START", "START", "CIAO", "HI", "INIZIA"]:
+                        manda_telegram(chat_id, "Ciao! Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
+                    elif testo.startswith("/start"):
                         parti = testo.split(); codice = parti[1] if len(parti) > 1 else ""
                         fam = con.execute("SELECT * FROM famiglie WHERE codice_link=?", (codice,)).fetchone() if codice else None
                         if fam:
                             manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo qui per firmare ed entrare.", {"inline_keyboard": [[{"text": "✅ HO CAPITO - SCRIVO IL CODICE", "callback_data": "AVVIA_START"}]]})
                         else:
-                            # QUI ERA IL BUG: prima mandava solo testo senza pulsante
-                            manda_telegram(chat_id, "Ciao! 👋 Per entrare devi prima iscriverti sul sito.\n\n1. Vai sul sito LA TUA BADANTE VIRTUALE\n2. Scrivi nome, cognome e cell\n3. Ti arriva un CODICE di 6 cifre\n4. Scrivi qui quel codice di 6 cifre e premi INVIA", {"inline_keyboard": [[{"text": "✅ HO CAPITO", "callback_data": "AVVIA_START"}]]})
+                            # Se fai /start senza codice, ti faccio vedere subito SI / NO / SOS
+                            manda_telegram(chat_id, "Ciao! 👋 Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?\n\nSe hai già il codice di 6 cifre dal sito, scrivilo qui.", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
                     elif testo.isdigit() and len(testo) == 6:
                         fam = con.execute("SELECT * FROM famiglie WHERE otp=?", (testo,)).fetchone()
                         if fam:
@@ -312,12 +312,20 @@ def bot_loop():
                                 con.execute("UPDATE persone SET telegram_id=? WHERE id=?", (chat_id, p["id"])); con.commit()
                                 manda_telegram(chat_id, f"Ciao UTENTE, vuoi ricevere i promemoria? Premi SI per accettare, NO per rifiutare.", {"inline_keyboard": [[{"text": "SI", "callback_data": f"ACCETTA_{p['id']}"}, {"text": "NO", "callback_data": f"RIFIUTA_{p['id']}"}]]}); trovato=True; break
                         if not trovato: manda_telegram(chat_id, "Numero non uguale a quello scritto. Si blocca tutto. Chiedi di controllare.")
+                    else:
+                        # Se scrivi qualcosa di diverso, ti rimando al menu
+                        if testo.strip() != "":
+                            manda_telegram(chat_id, "Scrivi AVVIA per vedere il menu ❤️")
                 if "callback_query" in upd:
                     cb = upd["callback_query"]; chat_id = cb["message"]["chat"]["id"]; data = cb["data"]
-                    # Risponde a Telegram che il pulsante è stato premuto, altrimenti resta l'orologio
                     try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cb["id"]}, timeout=5)
                     except: pass
-                    if data == "AVVIA_START":
+                    # === FIX 2 - PULSANTI CONFIGURAZIONE SI / NO ===
+                    if data == "CONFIG_SI":
+                        manda_telegram(chat_id, "Perfetto! Iniziamo la configurazione.\n\nSe hai il codice di 6 cifre dal sito, scrivilo qui e premi INVIA.\nSe non ce l'hai, vai sul sito e iscriviti.")
+                    elif data == "CONFIG_NO":
+                        manda_telegram(chat_id, "Ok, salto la configurazione. Puoi scrivermi AVVIA quando vuoi! ❤️")
+                    elif data == "AVVIA_START":
                         manda_telegram(chat_id, "Perfetto! Ora scrivi qui il tuo codice di 6 cifre che ti ha dato il sito e premi INVIA.")
                     elif data.startswith("SI_"):
                         mid = data.split("_")[1]; con.execute("UPDATE messaggi SET risposta='SI' WHERE id=?", (mid,)); con.commit()
@@ -343,6 +351,8 @@ def bot_loop():
                                 if altra: manda_telegram(altra["telegram_id"], f"🆘 AIUTO! {pers['nome']} ha premuto il bottone alle {ora}. Chiamalo subito!")
                                 manda_telegram(chat_id, "AIUTO MANDATO ✓")
                             else: manda_telegram(chat_id, "Servizio bloccato, non parte niente.")
+                        else:
+                            manda_telegram(chat_id, "🆘 SOS PREMUTO! Per mandare l'aiuto devi prima entrare con il codice di 6 cifre dal sito.")
                     elif data.startswith("ACCETTA"): manda_telegram(chat_id, "Grazie, hai accettato ✓ Ora riceverai i promemoria.", {"keyboard": [[{"text": "🆘 SOS - MANDA POSIZIONE", "request_location": True}], [{"text": "🆘 HELP"}]], "resize_keyboard": True})
                     elif data.startswith("RIFIUTA"): manda_telegram(chat_id, "Ok, non parte niente.")
                 con.close()
@@ -363,3 +373,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
     app.run(host="0.0.0.0", port=port)
+
