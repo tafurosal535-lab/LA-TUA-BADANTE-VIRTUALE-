@@ -1,16 +1,16 @@
 # LA TUA BADANTE VIRTUALE - TUTTO IN UN SOLO FILE - badante.py
 # AGGIORNAMENTO: SOLO 1 FINESTRA UTENTE - TOLTO MAMMA E PAPA'
 # 1. Metti il TOKEN del Bot qui sotto
-# 2. Scrivi nel terminale: pip install flask requests
+# 2. Scrivi nel terminale: pip install flask requests, os
 # 3. Scrivi: python badante.py
 # 4. Apri: http://localhost:5000
 
 import sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
 
-BOT_TOKEN = "METTI_QUI_IL_TOKEN_DEL_BOT"
+BOT_TOKEN = "9272882180:AAGuklnU9lms148WRLuuAC5Ll9pOHsYVyGc"
 BOT_NAME = "BadanteVirtualeBot"
-ADMIN_PASSWORD = "METTI_PASSWORD_SEGRETA"
+ADMIN_PASSWORD = "maremare75"
 MIA_EMAIL = "nostra-mail-fissa@badante.it"
 
 app = Flask(__name__)
@@ -340,4 +340,4 @@ if __name__ == "__main__":
     threading.Thread(target=fila, daemon=True).start()
     threading.Thread(target=bot_loop, daemon=True).start()
     print("LA TUA BADANTE VIRTUALE ACCESO - Apri http://localhost:5000")
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
