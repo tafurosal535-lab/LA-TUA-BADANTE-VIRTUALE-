@@ -1,16 +1,13 @@
-# LA TUA BADANTE VIRTUALE - TUTTO IN UN SOLO FILE - badante.py
-# AGGIORNAMENTO: SOLO 1 FINESTRA UTENTE - TOLTO MAMMA E PAPA'
-# 1. Metti il TOKEN del Bot qui sotto
-# 2. Scrivi nel terminale: pip install flask requests, os
-# 3. Scrivi: python badante.py
-# 4. Apri: http://localhost:5000
-import os
-import sqlite3, secrets, threading, time, datetime, json, requests
+# BADANTE.PY - VERSIONE RENDER CORRETTA
+# Start Command su Render: gunicorn BADANTE:app --bind 0.0.0.0:$PORT
+# Attenzione: BADANTE tutto maiuscolo, se scrivi badante minuscolo Render non lo trova
+
+import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
 
-BOT_TOKEN = "9272882180:AAGuklnU9lms148WRLuuAC5Ll9pOHsYVyGc"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 BOT_NAME = "BadanteVirtualeBot"
-ADMIN_PASSWORD = "maremare75"
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "METTI_PASSWORD_SEGRETA")
 MIA_EMAIL = "nostra-mail-fissa@badante.it"
 
 app = Flask(__name__)
@@ -32,6 +29,8 @@ def init_db():
 init_db()
 
 def manda_telegram(chat_id, testo, bottoni=None):
+    if not BOT_TOKEN or BOT_TOKEN.startswith("METTI_"):
+        return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": chat_id, "text": testo}
     if bottoni: data["reply_markup"] = json.dumps(bottoni)
@@ -40,14 +39,11 @@ def manda_telegram(chat_id, testo, bottoni=None):
         return r.status_code == 200
     except: return False
 
-# ============ HTML - SOLO 1 FINESTRA UTENTE ============
 HTML = """
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>LA TUA BADANTE VIRTUALE</title>
 <style>body{font-family:Arial;text-align:center}h1{font-size:22px}.finestra{border:2px solid #333;display:inline-block;width:320px;margin:10px;padding:15px;vertical-align:top}input,select{width:90%;padding:10px;margin:5px;font-size:16px}button{padding:12px 20px;font-size:16px;margin:5px;cursor:pointer}.verde{color:green}.rosso{color:red}.bloccato{opacity:0.5;pointer-events:none}</style></head><body>
 <h1>LA TUA BADANTE VIRTUALE è un servizio di promemoria. NON sostituiamo il medico.</h1>
 <div id="stato">SBLOCCATO</div>
-
-<!-- SOLO 1 FINESTRA - SOLO UTENTE - NIENTE MAMMA / PAPA' -->
 <div class="finestra" id="boxIscrizione"><h2>UTENTE</h2>
 <p>Utente <span id="numPersona">1</span> di 2</p>
 <input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="cell" placeholder="Numero Cell"><input id="email" placeholder="Email"><br>
@@ -56,15 +52,11 @@ HTML = """
 <div id="r1"></div><div id="linkbox"></div>
 <div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ ISCRIZIONE FATTA</div>
 </div>
-
 <br><button onclick="apri('fcont')">CONTATTI</button><button onclick="apri('fcanc')">CANCELLA I MIEI DATI</button>
 <div id="fcont" style="display:none"><textarea id="msgCont" style="width:80%;height:100px" placeholder="Scrivi qui"></textarea><br><button onclick="inviaContatto()">INVIO</button><div id="rc"></div></div>
 <div id="fcanc" style="display:none"><p>Vuoi cancellare tutti i tuoi dati? Premi SI per cancellare tutto, NO per tornare indietro.</p><button onclick="cancellaTutto()">SI</button><button onclick="apri('fcanc')">NO</button></div>
-
 <div><h2>Scrivi Messaggio</h2><input id="testo" placeholder="Es: Hai preso la medicina delle 9?"><input id="data" type="date"><input id="ora" type="time"><select id="dest"><option>UTENTE 2</option><option>UTENTE 1</option></select><br><button onclick="salvaMessaggio()">SALVA</button><div id="rm"></div><div id="lista"></div></div>
-
 <div><h2>🆘 SOS + POSIZIONE</h2><p>Premi SOS e manda la tua posizione all'altro utente.</p><button onclick="mandaSOS()" style="background:red;color:white;font-size:20px;padding:15px 30px">🆘 SOS - MANDA POSIZIONE</button><div id="rSOS"></div></div>
-
 <div><h2>CAMBIA NUMERO</h2><input id="nuovoNum" placeholder="Nuovo numero"><select id="tipoCambio"><option>UTENTE 1</option><option>UTENTE 2</option></select><button onclick="cambiaNumero()">CAMBIA NUMERO</button></div>
 <div><h2>SBLOCCA - PAGA ORA</h2><button onclick="paga('1 MESE')">1 MESE - 9,90 euro</button><button onclick="paga('3 MESI')">3 MESI - 24,90 euro</button><button onclick="paga('12 MESI')">12 MESI - 89,90 euro</button><p>Paga con Carta o PayPal</p></div>
 <script>
@@ -102,12 +94,12 @@ async function salvaPersona(){
 }
 async function salvaMessaggio(){
  if(!confirm("HAI SCRITTO: "+testo.value+" - È CORRETTO? SI / NO")) return;
- let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:data.value,[STRIPPED]
+ let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:data.value,ora:ora.value,destinatario:dest.value})}).then(x=>x.json());
  document.getElementById('rm').innerText=r.msg; if(r.ok) caricaLista();
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
 async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,testo:t,data:data.value,[STRIPPED] caricaLista(); }
+async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:data.value,ora:ora.value})}).then(x=>x.json()); caricaLista(); }
 async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
 async function cancellaTutto(){let r=await fetch('/cancella_tutto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,famiglia_id:FAMIGLIA_ID})}).then(x=>x.json()); alert(r.msg);}
 async function cambiaNumero(){let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,tipo:tipoCambio.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json()); alert(r.msg);}
@@ -128,6 +120,9 @@ async function mandaSOS(){
 @app.route("/")
 def home(): return render_template_string(HTML)
 
+@app.route("/health")
+def health(): return "OK", 200
+
 @app.route("/salva_persona", methods=["POST"])
 def salva_persona():
     d = request.json
@@ -146,7 +141,6 @@ def salva_persona():
     cnt = con.execute("SELECT COUNT(*) c FROM persone WHERE famiglia_id=?", (fam_id,)).fetchone()["c"]
     if cnt >= 2:
         con.close(); return jsonify({"ok": False, "msg": "GIA' 2 UTENTI - NON PUOI AGGIUNGERNE ALTRI"})
-    # Ruolo sempre UTENTE, numero progressivo
     ruolo = f"UTENTE {cnt+1}"
     con.execute("INSERT INTO persone(famiglia_id,ruolo,nome,cognome,cell,email,privacy) VALUES(?,?,?,?,?,?,1)", (fam_id, ruolo, d["nome"], d["cognome"], d["cell"], d.get("email","")))
     con.commit()
@@ -268,12 +262,14 @@ def bot_loop():
     offset = 0
     while True:
         try:
-            r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates", params={"offset": offset, "timeout": 30}).json()
+            if not BOT_TOKEN or BOT_TOKEN.startswith("METTI_"):
+                time.sleep(10); continue
+            r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates", params={"offset": offset, "timeout": 30}, timeout=35).json()
             for upd in r.get("result", []):
                 offset = upd["update_id"] + 1; con = db()
                 if "message" in upd:
                     msg = upd["message"]; chat_id = msg["chat"]["id"]; testo = msg.get("text", "")
-                    if testo == "/start":
+                    if testo.startswith("/start"):
                         parti = testo.split(); codice = parti[1] if len(parti) > 1 else ""
                         fam = con.execute("SELECT * FROM famiglie WHERE codice_link=?", (codice,)).fetchone() if codice else None
                         if fam: manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo per firmare ed entrare.")
@@ -335,9 +331,19 @@ def bot_loop():
                 con.close()
         except Exception as e: print("Errore bot:", e); time.sleep(2)
 
-if __name__ == "__main__":
+_threads_avviati = False
+def avvia_threads():
+    global _threads_avviati
+    if _threads_avviati: return
+    _threads_avviati = True
     threading.Thread(target=orologio, daemon=True).start()
     threading.Thread(target=fila, daemon=True).start()
     threading.Thread(target=bot_loop, daemon=True).start()
-    print("LA TUA BADANTE VIRTUALE ACCESO - Apri http://localhost:5000")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+avvia_threads()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
+    app.run(host="0.0.0.0", port=port)
+        
