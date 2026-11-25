@@ -64,7 +64,7 @@ HTML = """
 <div class="boxmsg"><p>4 - INVIA</p><button onclick="salvaMessaggio()">INVIA</button><div id="rm"></div></div>
 <div id="lista"></div></div>
 <div><h2>🆘 SOS + POSIZIONE</h2><p>Premi SOS e manda la tua posizione all'altro utente.</p><button onclick="mandaSOS()" style="background:red;color:white;font-size:20px;padding:15px 30px">🆘 SOS - MANDA POSIZIONE</button><div id="rSOS"></div></div>
-<div><h2>CAMBIA NUMERO</h2><input id="nuovoNum" placeholder="Nuovo numero"><select id="tipoCambio"><option>UTENTE 1</option><option>UTENTE 2</option></select><button onclick="cambiaNumero()">CAMBIA NUMERO</button></div>
+<div class="finestra" id="boxCambioNumero"><h2>CAMBIA NUMERO</h2><input id="nomeCambio" placeholder="Nome"><input id="cognomeCambio" placeholder="Cognome"><input id="emailCambio" placeholder="Email"><input id="vecchioNum" placeholder="Cellulare Vecchio"><input id="nuovoNum" placeholder="Cellulare Nuovo"><button id="btnCambia" onclick="cambiaNumero()">CAMBIA NUMERO</button><div id="rCambio"></div><div id="spuntaCambio" style="display:none;font-size:30px;color:green">✅ FATTO</div></div>
 <div><h2>SBLOCCA - PAGA ORA</h2><button onclick="paga('1 MESE')">1 MESE - 9,90 euro</button><button onclick="paga('3 MESI')">3 MESI - 24,90 euro</button><button onclick="paga('12 MESI')">12 MESI - 89,90 euro</button><p>Paga con Carta o PayPal</p></div>
 <script>
 let FAMIGLIA_ID=null;
@@ -79,6 +79,16 @@ function bloccaIscrizione(){
   document.getElementById('cognome').disabled=true;
   document.getElementById('cell').disabled=true;
   document.getElementById('email').disabled=true;
+}
+function bloccaCambio(){
+  document.getElementById('boxCambioNumero').classList.add('bloccato');
+  document.getElementById('spuntaCambio').style.display='block';
+  document.getElementById('btnCambia').disabled=true;
+  document.getElementById('nomeCambio').disabled=true;
+  document.getElementById('cognomeCambio').disabled=true;
+  document.getElementById('emailCambio').disabled=true;
+  document.getElementById('vecchioNum').disabled=true;
+  document.getElementById('nuovoNum').disabled=true;
 }
 async function salvaPersona(){
  // FASE 1 = UTENTE 1 - senza privacy ancora
@@ -124,14 +134,20 @@ async function salvaMessaggio(){
  let dataScelta = parti[0];
  let oraScelta = parti[1].substring(0,5);
  if(!confirm("HAI SCRITTO: "+testo.value+" - IL GIORNO "+dataScelta+" ALLE "+oraScelta+" - È CORRETTO? SI / NO")) return;
- let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:dataScelta,ora:oraScelta,destinatario:dest.value})}).then(x=>x.json());
+ let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:dataScelta,[STRIPPED]
  document.getElementById('rm').innerText=r.msg; if(r.ok) caricaLista();
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
 async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:dataora.value.split('T')[0],ora:dataora.value.split('T')[1].substring(0,5)})}); caricaLista(); }
+async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:dataora.value.split('T')[0],[STRIPPED] caricaLista(); }
 async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
-async function cambiaNumero(){let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,tipo:tipoCambio.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json()); alert(r.msg);}
+async function cambiaNumero(){
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
+ if(!nomeCambio.value || !cognomeCambio.value || !emailCambio.value || !vecchioNum.value || !nuovoNum.value){alert("MANCA NOME / COGNOME / EMAIL / CELLULARE VECCHIO / CELLULARE NUOVO");return;}
+ let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,nome:nomeCambio.value,cognome:cognomeCambio.value,email:emailCambio.value,vecchio_numero:vecchioNum.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json());
+ document.getElementById('rCambio').innerText=r.msg; document.getElementById('rCambio').className=r.ok?'verde':'rosso';
+ if(r.ok){ bloccaCambio(); }
+}
 async function paga(piano){alert("Paghi "+piano+" con Carta o PayPal. Dopo il pagamento Stripe manda WEBHOOK e ti sblocca in 1-2 minuti.");}
 async function mandaSOS(){
  if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
@@ -222,8 +238,19 @@ def cancella_messaggio():
 @app.route("/cambia_numero", methods=["POST"])
 def cambia_numero():
     d = request.json; con = db()
-    con.execute("UPDATE persone SET cell=?, telegram_id=NULL WHERE famiglia_id=? AND ruolo=?", (d["nuovo_numero"], d.get("utente_id"), d["tipo"]))
-    con.commit(); con.close(); return jsonify({"ok": True, "msg": "NUMERO CAMBIATO, DEVE FARE DI NUOVO CONDIVIDI NUMERO"})
+    nome = (d.get("nome") or "").strip().lower()
+    cognome = (d.get("cognome") or "").strip().lower()
+    email = (d.get("email") or "").strip().lower()
+    vecchio = (d.get("vecchio_numero") or "").strip()
+    nuovo = (d.get("nuovo_numero") or "").strip()
+    fam_id = d.get("utente_id")
+    if not nome or not cognome or not email or not vecchio or not nuovo or not fam_id:
+        con.close(); return jsonify({"ok": False, "msg": "MANCA NOME / COGNOME / EMAIL / CELLULARE VECCHIO / CELLULARE NUOVO"})
+    pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? AND LOWER(TRIM(nome))=? AND LOWER(TRIM(cognome))=? AND LOWER(TRIM(email))=? AND TRIM(cell)=?", (fam_id, nome, cognome, email, vecchio)).fetchone()
+    if not pers:
+        con.close(); return jsonify({"ok": False, "msg": "DATI SBAGLIATI - NOME / COGNOME / EMAIL / CELLULARE VECCHIO NON COMBACIANO - SI BLOCCA TUTTO"})
+    con.execute("UPDATE persone SET cell=?, telegram_id=NULL WHERE id=?", (nuovo, pers["id"]))
+    con.commit(); con.close(); return jsonify({"ok": True, "msg": "NUMERO CAMBIATO ✓ DEVE FARE DI NUOVO CONDIVIDI NUMERO"})
 @app.route("/contatti", methods=["POST"])
 def contatti():
     d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close(); return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
