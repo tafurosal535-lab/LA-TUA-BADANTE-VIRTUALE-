@@ -1,3 +1,6 @@
+# BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA V2
+# Start Command su Render: python BADANTE.PY
+
 import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
 
@@ -41,26 +44,31 @@ def manda_telegram(chat_id, testo, bottoni=None):
 
 HTML = """
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>LA TUA BADANTE VIRTUALE</title>
-<style>body{font-family:Arial;text-align:center}h1{font-size:22px}.finestra{border:2px solid #333;display:inline-block;width:320px;margin:10px;padding:15px;vertical-align:top}input,select{width:90%;padding:10px;margin:5px;font-size:16px}button{padding:12px 20px;font-size:16px;margin:5px;cursor:pointer}.verde{color:green}.rosso{color:red}.bloccato{opacity:0.5;pointer-events:none}</style></head><body>
+<style>body{font-family:Arial;text-align:center}h1{font-size:22px}.finestra{border:2px solid #333;display:inline-block;width:340px;margin:10px;padding:15px;vertical-align:top}input,select{width:92%;padding:10px;margin:5px;font-size:16px}button{padding:12px 20px;font-size:16px;margin:5px;cursor:pointer}.verde{color:green}.rosso{color:red}.bloccato{opacity:0.5;pointer-events:none}.boxmsg{border:2px solid #333;display:inline-block;width:340px;margin:5px;padding:10px;vertical-align:top}</style></head><body>
 <h1>LA TUA BADANTE VIRTUALE è un servizio di promemoria. NON sostituiamo il medico.</h1>
 <div id="stato">SBLOCCATO</div>
 <div class="finestra" id="boxIscrizione"><h2>UTENTE</h2>
 <p>Utente <span id="numPersona">1</span> di 2</p>
-<input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="cell" placeholder="Numero Cell"><input id="email" placeholder="Email"><br>
-<label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br>
+<input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="email" placeholder="Email"><input id="cell" placeholder="Numero Cell"><br>
+<div id="boxPrivacy" style="display:none"><label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br></div>
 <button id="btnSalva" onclick="salvaPersona()">SALVA UTENTE</button>
 <div id="r1"></div><div id="linkbox"></div>
-<div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ ISCRIZIONE FATTA</div>
+<div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ FATTO - ISCRIZIONE FATTA</div>
 </div>
-<br><button onclick="apri('fcont')">CONTATTI</button><button onclick="apri('fcanc')">CANCELLA I MIEI DATI</button>
-<div id="fcont" style="display:none"><textarea id="msgCont" style="width:80%;height:100px" placeholder="Scrivi qui"></textarea><br><button onclick="inviaContatto()">INVIO</button><div id="rc"></div></div>
-<div id="fcanc" style="display:none"><p>Vuoi cancellare tutti i tuoi dati? Premi SI per cancellare tutto, NO per tornare indietro.</p><button onclick="cancellaTutto()">SI</button><button onclick="apri('fcanc')">NO</button></div>
-<div><h2>Scrivi Messaggio</h2><input id="testo" placeholder="Es: Hai preso la medicina delle 9?"><input id="data" type="date"><input id="ora" type="time"><select id="dest"><option>UTENTE 2</option><option>UTENTE 1</option></select><br><button onclick="salvaMessaggio()">SALVA</button><div id="rm"></div><div id="lista"></div></div>
+<br><button onclick="apri('fcont')">CONTATTI</button>
+<div id="fcont" style="display:none"><textarea id="msgCont" style="width:80%;height:100px" placeholder="Scrivi qui - Se vuoi cancellare i tuoi dati scrivi CANCELLAMI"></textarea><br><button onclick="inviaContatto()">INVIO</button><div id="rc"></div></div>
+<div style="margin-top:15px"><h2>Scrivi Messaggio</h2>
+<div class="boxmsg"><p>1 - SCRIVI MESSAGGIO</p><input id="testo" placeholder="Es: Hai preso la medicina delle 9?"></div>
+<div class="boxmsg"><p>2 - SCEGLI GIORNO E ORA - CALENDARIO</p><input id="dataora" type="datetime-local"><br><small>Puoi mandare tra 1 minuto o tra 3 mesi</small></div>
+<div class="boxmsg"><p>3 - A CHI VA?</p><select id="dest"><option>UTENTE 2</option><option>UTENTE 1</option></select></div>
+<div class="boxmsg"><p>4 - INVIA</p><button onclick="salvaMessaggio()">INVIA</button><div id="rm"></div></div>
+<div id="lista"></div></div>
 <div><h2>🆘 SOS + POSIZIONE</h2><p>Premi SOS e manda la tua posizione all'altro utente.</p><button onclick="mandaSOS()" style="background:red;color:white;font-size:20px;padding:15px 30px">🆘 SOS - MANDA POSIZIONE</button><div id="rSOS"></div></div>
 <div><h2>CAMBIA NUMERO</h2><input id="nuovoNum" placeholder="Nuovo numero"><select id="tipoCambio"><option>UTENTE 1</option><option>UTENTE 2</option></select><button onclick="cambiaNumero()">CAMBIA NUMERO</button></div>
 <div><h2>SBLOCCA - PAGA ORA</h2><button onclick="paga('1 MESE')">1 MESE - 9,90 euro</button><button onclick="paga('3 MESI')">3 MESI - 24,90 euro</button><button onclick="paga('12 MESI')">12 MESI - 89,90 euro</button><p>Paga con Carta o PayPal</p></div>
 <script>
 let FAMIGLIA_ID=null;
+let FASE=1;
 function apri(id){let e=document.getElementById(id); e.style.display=e.style.display=='none'?'block':'none';}
 function bloccaIscrizione(){
   document.getElementById('boxIscrizione').classList.add('bloccato');
@@ -73,35 +81,56 @@ function bloccaIscrizione(){
   document.getElementById('email').disabled=true;
 }
 async function salvaPersona(){
- if(!document.getElementById('priv1').checked){alert("DEVI METTERE LA SPUNTA PRIVACY");return;}
- if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL");return;}
- let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
- document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
- if(r.ok){
-   FAMIGLIA_ID=r.famiglia_id;
-   document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b>';
-   if(r.quante==1){
+ // FASE 1 = UTENTE 1 - senza privacy ancora
+ if(FASE==1){
+   if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL");return;}
+   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
+   document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
+   if(r.ok){
+     FAMIGLIA_ID=r.famiglia_id;
+     document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b>';
+     // PASSA A UTENTE 2
+     FASE=2;
      document.getElementById('numPersona').innerText='2';
      document.getElementById('r1').innerText='✅ PRIMO UTENTE SALVATO. Ora inserisci il SECONDO UTENTE.';
-     nome.value=''; cognome.value=''; cell.value=''; email.value=''; document.getElementById('priv1').checked=false;
+     nome.value=''; cognome.value=''; cell.value=''; email.value='';
+     document.getElementById('boxPrivacy').style.display='block';
+     document.getElementById('btnSalva').innerText='SALVA - FINE ISCRIZIONE';
+     caricaLista();
    }
-   if(r.quante>=2){
+   return;
+ }
+ // FASE 2 = UTENTE 2 - QUI SERVE PRIVACY + 2 UTENTI OBBLIGATORI
+ if(FASE==2){
+   if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL - INSERISCI UTENTE 2");return;}
+   if(!document.getElementById('priv1').checked){alert("DEVI METTERE LA SPUNTA PRIVACY PER FINIRE");return;}
+   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
+   document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
+   if(r.ok){
+     if(r.quante<2){alert("INSERISCI UTENTE 2");return;}
      document.getElementById('r1').innerText='✅ 2 UTENTI ISCRITTI. Iscrizione chiusa.';
      bloccaIscrizione();
+     caricaLista();
    }
-   caricaLista();
+   return;
  }
 }
 async function salvaMessaggio(){
- if(!confirm("HAI SCRITTO: "+testo.value+" - È CORRETTO? SI / NO")) return;
- let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:data.value,ora:ora.value,destinatario:dest.value})}).then(x=>x.json());
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti con 2 UTENTI");return;}
+ if(!testo.value){alert("SCRIVI IL MESSAGGIO");return;}
+ if(!dataora.value){alert("SCEGLI GIORNO E ORA DAL CALENDARIO");return;}
+ // dataora = 2026-11-25T15:30 -> dividiamo in data e ora
+ let parti = dataora.value.split('T');
+ let dataScelta = parti[0];
+ let oraScelta = parti[1].substring(0,5);
+ if(!confirm("HAI SCRITTO: "+testo.value+" - IL GIORNO "+dataScelta+" ALLE "+oraScelta+" - È CORRETTO? SI / NO")) return;
+ let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:dataScelta,ora:oraScelta,destinatario:dest.value})}).then(x=>x.json());
  document.getElementById('rm').innerText=r.msg; if(r.ok) caricaLista();
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
 async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:data.value,ora:ora.value})}).then(x=>x.json()); caricaLista(); }
+async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:dataora.value.split('T')[0],ora:dataora.value.split('T')[1].substring(0,5)})}); caricaLista(); }
 async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
-async function cancellaTutto(){let r=await fetch('/cancella_tutto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,famiglia_id:FAMIGLIA_ID})}).then(x=>x.json()); alert(r.msg);}
 async function cambiaNumero(){let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,tipo:tipoCambio.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json()); alert(r.msg);}
 async function paga(piano){alert("Paghi "+piano+" con Carta o PayPal. Dopo il pagamento Stripe manda WEBHOOK e ti sblocca in 1-2 minuti.");}
 async function mandaSOS(){
@@ -172,8 +201,9 @@ def salva_messaggio():
     u = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
     if not u: return jsonify({"ok": False, "msg": "UTENTE NON TROVATO"})
     if u["stato"] == "BLOCCATO": return jsonify({"ok": False, "msg": "SEI BLOCCATO, PREMI SBLOCCA - PAGA ORA"})
+    # MAX 10 AL GIORNO PER UTENTE (destinatario)
     cnt = con.execute("SELECT COUNT(*) c FROM messaggi WHERE famiglia_id=? AND data_invio=? AND destinatario=?", (fam_id, d["data"], d["destinatario"])).fetchone()["c"]
-    if cnt >= 10: return jsonify({"ok": False, "msg": "HAI GIÀ 10 MESSAGGI PER OGGI"})
+    if cnt >= 10: return jsonify({"ok": False, "msg": "HAI GIÀ 10 MESSAGGI PER OGGI PER QUESTO UTENTE"})
     try: ora_scelta = datetime.datetime.strptime(f"{d['data']} {d['ora']}", "%Y-%m-%d %H:%M")
     except: return jsonify({"ok": False, "msg": "DATA O ORA SBAGLIATA"})
     if ora_scelta < datetime.datetime.now(): return jsonify({"ok": False, "msg": "ATTENZIONE, hai sbagliato tu, l'ora è già passata, scegli un'ora futura"})
@@ -199,6 +229,7 @@ def contatti():
     d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close(); return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
 @app.route("/cancella_tutto", methods=["POST"])
 def cancella_tutto():
+    # Tenuto solo per noi, non c'è più bottone sul sito. Si usa via CONTATTI se uno scrive CANCELLAMI
     uid = request.json.get("famiglia_id") or request.json.get("utente_id"); con = db(); con.execute("DELETE FROM messaggi WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM persone WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM famiglie WHERE id=?", (uid,)); con.execute("DELETE FROM utenti WHERE id=?", (uid,)); con.commit(); con.close(); return jsonify({"ok": True, "msg": "DATI CANCELLATI ✓"})
 @app.route("/stripe_webhook", methods=["POST"])
 def stripe_webhook():
@@ -275,7 +306,6 @@ def bot_loop():
                 print("Ricevuto da Telegram:", upd)
                 if "message" in upd:
                     msg = upd["message"]; chat_id = msg["chat"]["id"]; testo = msg.get("text", "")
-                    # === FIX 1 - AVVIA SCRITTO A MANO - QUESTO MANCAVA ===
                     if testo.strip().upper() in ["AVVIA", "AVVIA_START", "START", "CIAO", "HI", "INIZIA"]:
                         manda_telegram(chat_id, "Ciao! Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
                     elif testo.startswith("/start"):
@@ -284,7 +314,6 @@ def bot_loop():
                         if fam:
                             manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo qui per firmare ed entrare.", {"inline_keyboard": [[{"text": "✅ HO CAPITO - SCRIVO IL CODICE", "callback_data": "AVVIA_START"}]]})
                         else:
-                            # Se fai /start senza codice, ti faccio vedere subito SI / NO / SOS
                             manda_telegram(chat_id, "Ciao! 👋 Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?\n\nSe hai già il codice di 6 cifre dal sito, scrivilo qui.", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
                     elif testo.isdigit() and len(testo) == 6:
                         fam = con.execute("SELECT * FROM famiglie WHERE otp=?", (testo,)).fetchone()
@@ -313,14 +342,12 @@ def bot_loop():
                                 manda_telegram(chat_id, f"Ciao UTENTE, vuoi ricevere i promemoria? Premi SI per accettare, NO per rifiutare.", {"inline_keyboard": [[{"text": "SI", "callback_data": f"ACCETTA_{p['id']}"}, {"text": "NO", "callback_data": f"RIFIUTA_{p['id']}"}]]}); trovato=True; break
                         if not trovato: manda_telegram(chat_id, "Numero non uguale a quello scritto. Si blocca tutto. Chiedi di controllare.")
                     else:
-                        # Se scrivi qualcosa di diverso, ti rimando al menu
                         if testo.strip() != "":
                             manda_telegram(chat_id, "Scrivi AVVIA per vedere il menu ❤️")
                 if "callback_query" in upd:
                     cb = upd["callback_query"]; chat_id = cb["message"]["chat"]["id"]; data = cb["data"]
                     try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cb["id"]}, timeout=5)
                     except: pass
-                    # === FIX 2 - PULSANTI CONFIGURAZIONE SI / NO ===
                     if data == "CONFIG_SI":
                         manda_telegram(chat_id, "Perfetto! Iniziamo la configurazione.\n\nSe hai il codice di 6 cifre dal sito, scrivilo qui e premi INVIA.\nSe non ce l'hai, vai sul sito e iscriviti.")
                     elif data == "CONFIG_NO":
@@ -368,9 +395,7 @@ def avvia_threads():
     threading.Thread(target=bot_loop, daemon=True).start()
 
 avvia_threads()
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
     app.run(host="0.0.0.0", port=port)
-
