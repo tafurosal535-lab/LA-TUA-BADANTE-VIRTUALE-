@@ -1,22 +1,18 @@
-import sqlite3, os, json, threading, time, secrets, random, string, uuid
-from datetime import datetime, timedelta, date
+import sqlite3, os, json, threading, time, secrets, random, string
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, session, redirect, g, render_template_string
 import requests
 
-# ================== CONFIG ==================
 TOKEN = os.environ.get("TOKEN") or ""
 ADMIN_USER = os.environ.get("ADMIN_USER") or ""
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") or ""
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-
 DB = "database.db"
 PREZZO = 5
 DURATA_GIORNI = 30
 BASE = f"https://api.telegram.org/bot{TOKEN}"
-# =============================================
 
-# ================== DB ==================
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(DB, timeout=30, check_same_thread=False)
@@ -52,7 +48,8 @@ def genera_codice_famiglia():
 def salva_persona(fam_id, nome, eta, telefono, via, citta, cap, patologie, note, ruolo):
     con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
     cur = con.cursor()
-    cur.execute("INSERT INTO famiglie (id, chat_id, creata) VALUES (?,?,?)", (fam_id, "", datetime.now().isoformat())) if not cur.execute("SELECT id FROM famiglie WHERE id=?", (fam_id,)).fetchone() else None
+    if not cur.execute("SELECT id FROM famiglie WHERE id=?", (fam_id,)).fetchone():
+        cur.execute("INSERT INTO famiglie (id, chat_id, creata) VALUES (?,?,?)", (fam_id, "", datetime.now().isoformat()))
     cur.execute("INSERT INTO persone (fam_id, nome, eta, telefono, via, citta, cap, patologie, note, ruolo, creato) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (fam_id, nome, eta, telefono, via, citta, cap, patologie, note, ruolo, datetime.now().isoformat()))
     con.commit(); pid = cur.lastrowid; con.close()
     return pid
@@ -100,7 +97,6 @@ def is_attivo(chat_id):
         return datetime.fromisoformat(r["scadenza"]) > datetime.now()
     except: return False
 
-# ================== TELEGRAM ==================
 def tg(method, data=None, files=None):
     try:
         if files:
@@ -117,13 +113,7 @@ def invia(chat_id, testo, tastiera=None):
 def tastiera_pulsanti(righe):
     return {"inline_keyboard": [[{"text": t, "callback_data": c} for t, c in r] for r in righe]}
 
-def tastiera_risposta(righe):
-    return {"keyboard": [[{"text": t} for t in r] for r in righe], "resize_keyboard": True, "one_time_keyboard": False}
-
-# ================== OROLOGIO ==================
 orologio_attivo = {}
-orologio_thread = {}
-
 def orologio(chat_id, nome=""):
     while orologio_attivo.get(chat_id):
         try:
@@ -136,13 +126,11 @@ def orologio(chat_id, nome=""):
 def avvia_orologio(chat_id, nome=""):
     if orologio_attivo.get(chat_id): return
     orologio_attivo[chat_id] = True
-    t = threading.Thread(target=orologio, args=(chat_id, nome), daemon=True)
-    orologio_thread[chat_id] = t; t.start()
+    threading.Thread(target=orologio, args=(chat_id, nome), daemon=True).start()
 
 def ferma_orologio(chat_id):
     orologio_attivo[chat_id] = False
 
-# ================== BOT LOOP ==================
 sessioni = {}
 def bot_loop():
     offset = 0
@@ -193,9 +181,7 @@ def bot_loop():
                     con = sqlite3.connect(DB, timeout=30, check_same_thread=False); cur = con.cursor()
                     cur.execute("INSERT OR IGNORE INTO utenti (chat_id, username, nome, creato) VALUES (?,?,?,?)", (chat_id, msg.get("from", {}).get("username", ""), msg.get("from", {}).get("first_name", ""), datetime.now().isoformat()))
                     con.commit(); con.close()
-                    invia(chat_id, "Ciao! Sono la <b>tua Badante Virtuale</b> ❤️\n\nSono qui per aiutarti, parlarti e ricordarti le cose importanti.\n\nVuoi configurare la Badante?\n\nScrivi:\n<b>SI</b> - per configurare\n<b>NO</b> - per parlare subito", tastiera_pulsanti([[("✅ SI, configura", "SI_CONFIG"), ("💬 NO, parla subito", "NO_PARLA")]]))
-                    # Callback SI_CONFIG / NO_PARLA gestiti sotto via testo SI/NO
-                    # Per semplicita, se utente preme, arriva come callback ma non gestito sopra, quindi gestiamo qui con testo finto
+                    invia(chat_id, "Ciao! Sono la <b>tua Badante Virtuale</b> ❤️\n\nSono qui per aiutarti, parlarti e ricordarti le cose importanti.\n\nVuoi configurare la Badante?\n\nScrivi:\n<b>SI</b> - per configurare\n<b>NO</b> - per parlare subito")
                     continue
                 elif testo.strip().upper().startswith("/START"):
                     invia(chat_id, "Ciao! Sono la <b>tua Badante Virtuale</b> ❤️\n\nScrivi <b>AVVIA</b> per cominciare.")
@@ -289,7 +275,6 @@ def bot_loop():
         except Exception as e:
             print("LOOP ERR", e); time.sleep(2)
 
-# ================== PAGINA UTENTI ==================
 HTML_UTENTI = """
 <!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>La Tua Badante Virtuale</title>
 <style>body{font-family:Arial;background:#fff5f5;margin:0;padding:16px} .box{max-width:520px;margin:auto;background:white;border-radius:16px;padding:20px;box-shadow:0 4px 20px #0001} h1{color:#d6336c;text-align:center} input,textarea{width:100%;padding:12px;margin:6px 0;border:1px solid #ddd;border-radius:10px;font-size:16px;box-sizing:border-box} button{width:100%;padding:14px;background:#d6336c;color:white;border:0;border-radius:12px;font-size:17px;font-weight:bold} .small{font-size:13px;color:#666;text-align:center} .msg{padding:10px;border-radius:10px;margin:8px 0;background:#ffeef3} .bot{background:#ffeef3} .tu{background:#e7f5ff;text-align:right}</style></head>
@@ -328,7 +313,6 @@ def api_paga():
 def webhook():
     return jsonify({"ok": True})
 
-# ================== ADMIN ==================
 HTML_LOGIN = """
 <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin Login</title><style>body{font-family:Arial;background:#f1f3f5;display:flex;justify-content:center;padding:20px} .box{background:white;padding:24px;border-radius:16px;width:100%;max-width:360px;box-shadow:0 4px 20px #0002} input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;border-radius:10px} button{width:100%;padding:13px;background:#1971c2;color:white;border:0;border-radius:12px;font-weight:bold}</style></head><body><div class="box"><h2>🔐 Admin Badante</h2><form method="POST"><input name="utente" placeholder="Utente" required><input name="password" type="password" placeholder="Password" required><button>ENTRA</button></form><p style="color:red">{{err}}</p></div></body></html>
 """
@@ -391,7 +375,6 @@ def admin_elimina_persona(pid):
     db = get_db(); db.execute("DELETE FROM persone WHERE id=?", (pid,)); db.commit()
     return redirect("/admin_utenti")
 
-# ================== AVVIO ==================
 if __name__ == "__main__":
     threading.Thread(target=bot_loop, daemon=True).start()
     port = int(os.environ.get("PORT", 10000))
