@@ -1,8 +1,6 @@
-import os, random, string, sqlite3
+import os, random, string, sqlite3, math
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime, timedelta
-import math
-import requests
 
 app = Flask(__name__)
 DB = "badante.db"
@@ -105,6 +103,7 @@ label{font-size:14px}
 <hr>
 <button class='btn-orange' onclick='mostraCambia()'>📱 CAMBIA NUMERO</button>
 <button class='btn-red' onclick='mostraCancella()'>🗑️ CANCELLA I MIEI DATI</button>
+<button style='background:#eee;color:#333;font-size:13px' onclick='ricominciaTutto()'>🔄 RICOMINCIA - Mostra tutto di nuovo</button>
 
 <div id='boxCambia' class='hidden'>
 <h3>CAMBIA NUMERO</h3>
@@ -139,18 +138,29 @@ label{font-size:14px}
 <button class='btn-green' onclick="abbonati('ANNO')" style='font-size:20px;padding:18px'>ABBONATI - € 60,00 PER 12 MESI</button>
 <p style='font-size:13px'>2 contatti per 12 mesi - Pagamento sicuro</p>
 </div>
+<br>
+<button style='background:#eee;color:#333' onclick='ricominciaTutto()'>🔄 TORNA A ISCRIZIONE</button>
 </div>
 
 </div>
 <script>
 let step = 1;
 let datiUtente1 = null;
-let famiglia_id = localStorage.getItem('famiglia_id') || null;
+let famiglia_id = null;
 
-// CORRETTO: se riapre la pagina, controlla subito se è bloccato
-if(famiglia_id){
-  // Aspetta che la pagina carichi e controlla
-  window.addEventListener('load', ()=>{ controllaStato(); });
+function ricominciaTutto(){
+  localStorage.removeItem('famiglia_id');
+  famiglia_id = null;
+  step = 1; datiUtente1 = null;
+  document.getElementById('sezioneIscrizione').classList.remove('hidden');
+  document.getElementById('sezioneAbbonamento').classList.add('hidden');
+  document.getElementById('trialBox').classList.add('hidden');
+  document.getElementById('formIscrizione').classList.remove('hidden');
+  document.getElementById('fatto').classList.add('hidden');
+  document.getElementById('cancellato').classList.add('hidden');
+  document.getElementById('titolo').innerText='ISCRIZIONE - UTENTE 1';
+  document.getElementById('btnAvanti').innerText='SALVA UTENTE 1 - AVANTI ➡️';
+  document.getElementById('nome').value=''; document.getElementById('cognome').value=''; document.getElementById('email').value=''; document.getElementById('cellulare').value=''; document.getElementById('privacy').checked=false;
 }
 
 function indietro(){
@@ -224,7 +234,6 @@ async function cancellaDati(){
   let r = await fetch('/cancella_dati', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, cellulare})});
   let j = await r.json();
   if(j.ok){
-    // CORRETTO: nascondi solo form e box, lascia visibile il messaggio CANCELLAZIONE
     localStorage.removeItem('famiglia_id');
     document.getElementById('boxCancella').classList.add('hidden');
     document.getElementById('boxCambia').classList.add('hidden');
@@ -247,6 +256,11 @@ async function controllaStato(){
   if(!famiglia_id) return;
   let r = await fetch('/stato/' + famiglia_id);
   let j = await r.json();
+  if(j.non_trovato){
+    // Se la famiglia non esiste più, mostra di nuovo tutto
+    ricominciaTutto();
+    return;
+  }
   if(j.bloccato){
     document.getElementById('sezioneIscrizione').classList.add('hidden');
     document.getElementById('sezioneAbbonamento').classList.remove('hidden');
@@ -316,13 +330,12 @@ def stato(fid):
     f = c.execute("SELECT * FROM famiglie WHERE id=?", (fid,)).fetchone()
     c.close()
     if not f:
-        return jsonify({"bloccato": True, "giorni_rimasti": 0})
+        return jsonify({"bloccato": False, "non_trovato": True, "giorni_rimasti": 7})
     if f["abbonato"] == 1:
         return jsonify({"bloccato": False, "giorni_rimasti": None, "abbonato": True})
     try:
         fine = datetime.fromisoformat(f["trial_fine"])
         ora = datetime.now()
-        # CORRETTO: arrotonda per eccesso, così il primo giorno dice 7 e non 6
         secondi = (fine - ora).total_seconds()
         if secondi <= 0:
             return jsonify({"bloccato": True, "giorni_rimasti": 0})
@@ -381,4 +394,3 @@ def cancella_dati():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-                
