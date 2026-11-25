@@ -1,10 +1,12 @@
-import os, random, string, sqlite3, math
+import os, random, string, sqlite3, json, math
 from flask import Flask, request, jsonify, render_template_string
 from datetime import datetime, timedelta
+import requests
 
 app = Flask(__name__)
 DB = "badante.db"
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BASE_URL = os.environ.get("BASE_URL", "")
 
 def db():
     c = sqlite3.connect(DB)
@@ -47,6 +49,16 @@ init_db()
 def gen_codice(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
+def send_telegram(chat_id, testo):
+    if not BOT_TOKEN or not chat_id:
+        return False
+    try:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": testo}, timeout=10)
+        return True
+    except:
+        return False
+
 HTML = """
 <!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>Iscrizione Badante</title>
@@ -63,8 +75,8 @@ button{width:100%;padding:13px;margin:6px 0;border:0;border-radius:10px;font-siz
 .btn-gold{background:#FFD700;color:#000;font-weight:bold;font-size:20px;padding:18px}
 label{font-size:14px}
 .success{background:#d4edda;color:#155724;padding:12px;border-radius:10px;text-align:center;font-weight:bold}
+.trial{background:#fff3cd;color:#856404;padding:12px;border-radius:10px;text-align:center;font-weight:bold;margin-bottom:10px}
 .blocco{background:#f8d7da;color:#721c24;padding:14px;border-radius:10px;text-align:center;font-weight:bold}
-.trial{background:#fff3cd;color:#856404;padding:12px;border-radius:10px;text-align:center;font-weight:bold}
 .premio{background:#fff8dc;padding:20px;border:3px solid #FFD700;border-radius:14px;text-align:center}
 .premio-verde{background:#eaf7ee;padding:20px;border:3px solid #28a745;border-radius:14px;text-align:center}
 .hidden{display:none}
@@ -73,11 +85,9 @@ label{font-size:14px}
 </style></head>
 <body>
 <div class='box'>
-
 <div id='trialBox' class='hidden trial'></div>
-
-<div id='sezioneIscrizione'>
 <h2 id='titolo'>ISCRIZIONE - UTENTE 1</h2>
+
 <div id='formIscrizione'>
 <input id='nome' placeholder='Nome'>
 <input id='cognome' placeholder='Cognome'>
@@ -103,7 +113,6 @@ label{font-size:14px}
 <hr>
 <button class='btn-orange' onclick='mostraCambia()'>📱 CAMBIA NUMERO</button>
 <button class='btn-red' onclick='mostraCancella()'>🗑️ CANCELLA I MIEI DATI</button>
-<button style='background:#eee;color:#333;font-size:13px' onclick='ricominciaTutto()'>🔄 RICOMINCIA - Mostra tutto di nuovo</button>
 
 <div id='boxCambia' class='hidden'>
 <h3>CAMBIA NUMERO</h3>
@@ -120,9 +129,9 @@ label{font-size:14px}
 <button class='btn-red' onclick='cancellaDati()'>CONFERMA CANCELLAZIONE</button>
 <div id='msgCancella'></div>
 </div>
-</div>
 
 <div id='sezioneAbbonamento' class='hidden'>
+<br>
 <div class='blocco'>⏰ PROVA GRATIS FINITA<br>Sei stato BLOCCATO</div>
 <br>
 <div class='premio'>
@@ -138,8 +147,6 @@ label{font-size:14px}
 <button class='btn-green' onclick="abbonati('ANNO')" style='font-size:20px;padding:18px'>ABBONATI - € 60,00 PER 12 MESI</button>
 <p style='font-size:13px'>2 contatti per 12 mesi - Pagamento sicuro</p>
 </div>
-<br>
-<button style='background:#eee;color:#333' onclick='ricominciaTutto()'>🔄 TORNA A ISCRIZIONE</button>
 </div>
 
 </div>
@@ -147,21 +154,6 @@ label{font-size:14px}
 let step = 1;
 let datiUtente1 = null;
 let famiglia_id = null;
-
-function ricominciaTutto(){
-  localStorage.removeItem('famiglia_id');
-  famiglia_id = null;
-  step = 1; datiUtente1 = null;
-  document.getElementById('sezioneIscrizione').classList.remove('hidden');
-  document.getElementById('sezioneAbbonamento').classList.add('hidden');
-  document.getElementById('trialBox').classList.add('hidden');
-  document.getElementById('formIscrizione').classList.remove('hidden');
-  document.getElementById('fatto').classList.add('hidden');
-  document.getElementById('cancellato').classList.add('hidden');
-  document.getElementById('titolo').innerText='ISCRIZIONE - UTENTE 1';
-  document.getElementById('btnAvanti').innerText='SALVA UTENTE 1 - AVANTI ➡️';
-  document.getElementById('nome').value=''; document.getElementById('cognome').value=''; document.getElementById('email').value=''; document.getElementById('cellulare').value=''; document.getElementById('privacy').checked=false;
-}
 
 function indietro(){
   if(step === 2){
@@ -193,12 +185,17 @@ async function avanti(){
   let privacy = document.getElementById('privacy').checked;
   if(!nome || !cognome || !email || !cellulare){ document.getElementById('msg').innerHTML='Compila tutti i campi'; return; }
   if(!privacy){ document.getElementById('msg').innerHTML='Devi accettare la Privacy'; return; }
+
   if(step === 1){
     datiUtente1 = {nome, cognome, email, cellulare, privacy:true, ruolo:'UTENTE 1'};
     step = 2;
     document.getElementById('titolo').innerText = 'ISCRIZIONE - UTENTE 2';
     document.getElementById('btnAvanti').innerText = 'SALVA UTENTE 2 - FINE ✅';
-    document.getElementById('nome').value=''; document.getElementById('cognome').value=''; document.getElementById('email').value=''; document.getElementById('cellulare').value=''; document.getElementById('privacy').checked=false;
+    document.getElementById('nome').value='';
+    document.getElementById('cognome').value='';
+    document.getElementById('email').value='';
+    document.getElementById('cellulare').value='';
+    document.getElementById('privacy').checked=false;
     document.getElementById('msg').innerHTML='Ora inserisci UTENTE 2. Se hai sbagliato UTENTE 1, premi INDIETRO.';
   } else {
     let datiUtente2 = {nome, cognome, email, cellulare, privacy:true, ruolo:'UTENTE 2'};
@@ -206,12 +203,13 @@ async function avanti(){
     let j = await r.json();
     if(j.ok){
       famiglia_id = j.famiglia_id;
-      localStorage.setItem('famiglia_id', famiglia_id);
       document.getElementById('formIscrizione').classList.add('hidden');
       document.getElementById('fatto').classList.remove('hidden');
       document.getElementById('datiTelegram').innerHTML = '<br><b>Codice Link Telegram:</b> ' + j.codice_link + '<br><b>OTP:</b> ' + j.otp + '<br><br>Apri Telegram e premi Condividi Numero';
       controllaStato();
-    } else { document.getElementById('msg').innerHTML = j.errore; }
+    } else {
+      document.getElementById('msg').innerHTML = j.errore;
+    }
   }
 }
 
@@ -224,7 +222,11 @@ async function cambiaNumero(){
   if(!vecchio || !nuovo){ document.getElementById('msgCambia').innerHTML='Metti vecchio e nuovo numero'; return; }
   let r = await fetch('/cambia_numero', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({vecchio, nuovo})});
   let j = await r.json();
-  document.getElementById('msgCambia').innerHTML = j.ok ? '✅✅ NUMERO CAMBIATO<br>Nuovo codice Telegram: <b>' + j.codice_link + '</b><br>Nuovo OTP: <b>' + j.otp + '</b><br>Rifai Condividi Numero su Telegram con il numero nuovo.' : j.errore;
+  if(j.ok){
+    document.getElementById('msgCambia').innerHTML = '✅✅ NUMERO CAMBIATO<br>Nuovo codice Telegram: <b>' + j.codice_link + '</b><br>Nuovo OTP: <b>' + j.otp + '</b><br>Rifai Condividi Numero su Telegram con il numero nuovo.';
+  } else {
+    document.getElementById('msgCambia').innerHTML = j.errore;
+  }
 }
 
 async function cancellaDati(){
@@ -234,12 +236,10 @@ async function cancellaDati(){
   let r = await fetch('/cancella_dati', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, cellulare})});
   let j = await r.json();
   if(j.ok){
-    localStorage.removeItem('famiglia_id');
     document.getElementById('boxCancella').classList.add('hidden');
     document.getElementById('boxCambia').classList.add('hidden');
     document.getElementById('formIscrizione').classList.add('hidden');
     document.getElementById('fatto').classList.add('hidden');
-    document.getElementById('trialBox').classList.add('hidden');
     document.getElementById('cancellato').classList.remove('hidden');
     setTimeout(()=>{
       document.getElementById('cancellato').classList.add('hidden');
@@ -249,20 +249,16 @@ async function cancellaDati(){
       document.getElementById('btnAvanti').innerText='SALVA UTENTE 1 - AVANTI ➡️';
       document.getElementById('nome').value=''; document.getElementById('cognome').value=''; document.getElementById('email').value=''; document.getElementById('cellulare').value=''; document.getElementById('privacy').checked=false;
     }, 3000);
-  } else { document.getElementById('msgCancella').innerHTML = j.errore; }
+  } else {
+    document.getElementById('msgCancella').innerHTML = j.errore;
+  }
 }
 
 async function controllaStato(){
   if(!famiglia_id) return;
   let r = await fetch('/stato/' + famiglia_id);
   let j = await r.json();
-  if(j.non_trovato){
-    // Se la famiglia non esiste più, mostra di nuovo tutto
-    ricominciaTutto();
-    return;
-  }
   if(j.bloccato){
-    document.getElementById('sezioneIscrizione').classList.add('hidden');
     document.getElementById('sezioneAbbonamento').classList.remove('hidden');
     document.getElementById('trialBox').classList.add('hidden');
   } else {
@@ -270,7 +266,7 @@ async function controllaStato(){
     if(j.abbonato){
       document.getElementById('trialBox').classList.remove('hidden');
       document.getElementById('trialBox').innerHTML = '✅ ABBONAMENTO ATTIVO - Grazie!';
-    } else if(j.giorni_rimasti !== null && j.giorni_rimasti !== undefined){
+    } else if(j.giorni_rimasti !== null){
       document.getElementById('trialBox').classList.remove('hidden');
       document.getElementById('trialBox').innerHTML = '🎁 PROVA GRATIS 7 GIORNI - Ti restano ' + j.giorni_rimasti + ' giorni';
     }
@@ -281,14 +277,11 @@ async function abbonati(tipo){
   let r = await fetch('/abbonati', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({famiglia_id: famiglia_id, tipo: tipo})});
   let j = await r.json();
   if(j.ok){
-    if(tipo === 'MESE'){
-      alert('✅✅ ABBONAMENTO ATTIVATO - 2 CONTATTI A € 6,50 AL MESE - Grazie!');
-    } else {
-      alert('✅✅ ABBONAMENTO ATTIVATO - 2 CONTATTI PER 12 MESI A € 60,00 - Grazie!');
-    }
-    controllaStato();
-    document.getElementById('sezioneIscrizione').classList.remove('hidden');
+    if(tipo === 'MESE'){ alert('✅✅ ABBONAMENTO ATTIVATO - 2 CONTATTI A € 6,50 AL MESE - Grazie!'); }
+    else { alert('✅✅ ABBONAMENTO ATTIVATO - 2 CONTATTI PER 12 MESI A € 60,00 - Grazie!'); }
     document.getElementById('sezioneAbbonamento').classList.add('hidden');
+    document.getElementById('trialBox').classList.remove('hidden');
+    document.getElementById('trialBox').innerHTML = '✅ ABBONAMENTO ATTIVO - Grazie!';
   }
 }
 </script></body></html>
@@ -315,8 +308,7 @@ def iscrivi_coppia():
     otp = gen_codice(6); codice = gen_codice(6)
     ora = datetime.now()
     trial_fine = ora + timedelta(days=7)
-    cur = c.execute("INSERT INTO famiglie (otp, codice_link, data_iscrizione, trial_fine, abbonato) VALUES (?,?,?,?,0)",
-                    (otp, codice, ora.isoformat(), trial_fine.isoformat()))
+    cur = c.execute("INSERT INTO famiglie (otp, codice_link, data_iscrizione, trial_fine, abbonato) VALUES (?,?,?,?,0)", (otp, codice, ora.isoformat(), trial_fine.isoformat()))
     fid = cur.lastrowid
     for u in [u1, u2]:
         c.execute("INSERT INTO utenti (famiglia_id, ruolo, nome, cognome, email, cellulare, privacy) VALUES (?,?,?,?,?,?,1)",
@@ -330,7 +322,7 @@ def stato(fid):
     f = c.execute("SELECT * FROM famiglie WHERE id=?", (fid,)).fetchone()
     c.close()
     if not f:
-        return jsonify({"bloccato": False, "non_trovato": True, "giorni_rimasti": 7})
+        return jsonify({"bloccato": False, "giorni_rimasti": 7})
     if f["abbonato"] == 1:
         return jsonify({"bloccato": False, "giorni_rimasti": None, "abbonato": True})
     try:
