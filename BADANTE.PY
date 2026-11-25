@@ -1,15 +1,17 @@
-# BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA V2
+# BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA V2 + ADMIN CON LOGIN - LA TUA BADANTE - FEMMINILE
 # Start Command su Render: python BADANTE.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, redirect, session
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "METTI_QUI_IL_TOKEN_DEL_BOT")
 BOT_NAME = "BadanteVirtualeBot"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "METTI_PASSWORD_SEGRETA")
+ADMIN_USER = os.environ.get("ADMIN_USER", "")
 MIA_EMAIL = "nostra-mail-fissa@badante.it"
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "chiave-segreta-cambia-subito")
 
 def db():
     c = sqlite3.connect("database.db", check_same_thread=False)
@@ -41,6 +43,62 @@ def manda_telegram(chat_id, testo, bottoni=None):
     except Exception as e:
         print("Errore manda_telegram:", e)
         return False
+
+HTML_LOGIN = """
+<html><body style="background:#1e6bff; color:white; font-family:sans-serif; text-align:center; padding-top:80px;">
+<h1>ADMIN - Solo tu</h1>
+<p>Prima fai login, poi vedi gli utenti.</p>
+<form method="post">
+<input type="text" name="username" placeholder="Login" style="padding:12px; font-size:18px; width:260px;"><br><br>
+<input type="password" name="password" placeholder="Password" style="padding:12px; font-size:18px; width:260px;"><br><br>
+<button style="padding:12px 30px; font-size:18px;">ENTRA</button>
+</form>
+{% if errore %}<p style="color:yellow; font-weight:bold;">Login o password sbagliata</p>{% endif %}
+</body></html>
+"""
+
+HTML_ADMIN = """
+<html><body style="background:#1e6bff; color:white; font-family:sans-serif; padding:20px;">
+<h1>Utenti - Render</h1>
+<p>Sei dentro, {{ user }}.</p>
+<a href="/admin_utenti/logout" style="color:white;">Esci</a>
+<hr>
+<h2>Famiglie: {{ totale }}</h2>
+{% for f in famiglie %}
+<p><b>Famiglia {{ f['id'] }}</b> - Codice: {{ f['codice_link'] }} - OTP: {{ f['otp'] }} - Stato: {{ f['stato'] }} - Piano: {{ f['piano'] }}</p>
+{% endfor %}
+<hr>
+<h2>Persone iscritte</h2>
+{% for p in persone %}
+<p>{{ p['ruolo'] }} - {{ p['nome'] }} {{ p['cognome'] }} - Cell: {{ p['cell'] }} - Email: {{ p['email'] }} - Famiglia: {{ p['famiglia_id'] }} - Verificato: {{ p['verificato'] }}</p>
+{% endfor %}
+{% if not persone %}<p>Nessuna persona trovata</p>{% endif %}
+</body></html>
+"""
+
+@app.route("/admin_utenti", methods=["GET", "POST"])
+def admin_utenti():
+    if not ADMIN_USER or not ADMIN_PASSWORD or ADMIN_PASSWORD.startswith("METTI_"):
+        return "Admin non configurato su Render. Metti ADMIN_USER e ADMIN_PASSWORD in Environment.", 500
+    if request.method == "POST":
+        if request.form.get("username") == ADMIN_USER and request.form.get("password") == ADMIN_PASSWORD:
+            session["admin"] = True
+            session["user"] = ADMIN_USER
+            return redirect("/admin_utenti")
+        return render_template_string(HTML_LOGIN, errore=True)
+    if not session.get("admin"):
+        return render_template_string(HTML_LOGIN, errore=False)
+    con = db()
+    famiglie = con.execute("SELECT * FROM famiglie ORDER BY id DESC").fetchall()
+    persone = con.execute("SELECT * FROM persone ORDER BY famiglia_id, id").fetchall()
+    totale = len(famiglie)
+    con.close()
+    return render_template_string(HTML_ADMIN, famiglie=famiglie, persone=persone, totale=totale, user=session.get("user"))
+
+@app.route("/admin_utenti/logout")
+def admin_utenti_logout():
+    session.clear()
+    return redirect("/admin_utenti")
 
 HTML = """
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>LA TUA BADANTE VIRTUALE</title>
@@ -91,7 +149,6 @@ function bloccaCambio(){
   document.getElementById('nuovoNum').disabled=true;
 }
 async function salvaPersona(){
- // FASE 1 = UTENTE 1 - senza privacy ancora
  if(FASE==1){
    if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL");return;}
    let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
@@ -99,7 +156,6 @@ async function salvaPersona(){
    if(r.ok){
      FAMIGLIA_ID=r.famiglia_id;
      document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b>';
-     // PASSA A UTENTE 2
      FASE=2;
      document.getElementById('numPersona').innerText='2';
      document.getElementById('r1').innerText='✅ PRIMO UTENTE SALVATO. Ora inserisci il SECONDO UTENTE.';
@@ -110,7 +166,6 @@ async function salvaPersona(){
    }
    return;
  }
- // FASE 2 = UTENTE 2 - QUI SERVE PRIVACY + 2 UTENTI OBBLIGATORI
  if(FASE==2){
    if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL - INSERISCI UTENTE 2");return;}
    if(!document.getElementById('priv1').checked){alert("DEVI METTERE LA SPUNTA PRIVACY PER FINIRE");return;}
@@ -129,17 +184,35 @@ async function salvaMessaggio(){
  if(!FAMIGLIA_ID){alert("Prima devi iscriverti con 2 UTENTI");return;}
  if(!testo.value){alert("SCRIVI IL MESSAGGIO");return;}
  if(!dataora.value){alert("SCEGLI GIORNO E ORA DAL CALENDARIO");return;}
- // dataora = 2026-11-25T15:30 -> dividiamo in data e ora
  let parti = dataora.value.split('T');
  let dataScelta = parti[0];
  let oraScelta = parti[1].substring(0,5);
  if(!confirm("HAI SCRITTO: "+testo.value+" - IL GIORNO "+dataScelta+" ALLE "+oraScelta+" - È CORRETTO? SI / NO")) return;
- let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:dataScelta,[STRIPPED]
+ let payload = {};
+ payload.famiglia_id = FAMIGLIA_ID;
+ payload.utente_id = FAMIGLIA_ID;
+ payload.testo = testo.value;
+ payload.data = dataScelta;
+ payload.ora = oraScelta;
+ payload.destinatario = dest.value;
+ let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json());
  document.getElementById('rm').innerText=r.msg; if(r.ok) caricaLista();
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
 async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:dataora.value.split('T')[0],[STRIPPED] caricaLista(); }
+async function modificaMsg(id){
+ let t=prompt("Nuovo testo:");
+ if(!t) return;
+ if(!dataora.value){alert("SCEGLI GIORNO E ORA DAL CALENDARIO");return;}
+ let p2=dataora.value.split('T');
+ let payload2 = {};
+ payload2.id = id;
+ payload2.testo = t;
+ payload2.data = p2[0];
+ payload2.ora = p2[1].substring(0,5);
+ await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload2)}).then(x=>x.json());
+ caricaLista();
+}
 async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
 async function cambiaNumero(){
  if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
@@ -217,7 +290,6 @@ def salva_messaggio():
     u = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
     if not u: return jsonify({"ok": False, "msg": "UTENTE NON TROVATO"})
     if u["stato"] == "BLOCCATO": return jsonify({"ok": False, "msg": "SEI BLOCCATO, PREMI SBLOCCA - PAGA ORA"})
-    # MAX 10 AL GIORNO PER UTENTE (destinatario)
     cnt = con.execute("SELECT COUNT(*) c FROM messaggi WHERE famiglia_id=? AND data_invio=? AND destinatario=?", (fam_id, d["data"], d["destinatario"])).fetchone()["c"]
     if cnt >= 10: return jsonify({"ok": False, "msg": "HAI GIÀ 10 MESSAGGI PER OGGI PER QUESTO UTENTE"})
     try: ora_scelta = datetime.datetime.strptime(f"{d['data']} {d['ora']}", "%Y-%m-%d %H:%M")
@@ -256,7 +328,6 @@ def contatti():
     d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close(); return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
 @app.route("/cancella_tutto", methods=["POST"])
 def cancella_tutto():
-    # Tenuto solo per noi, non c'è più bottone sul sito. Si usa via CONTATTI se uno scrive CANCELLAMI
     uid = request.json.get("famiglia_id") or request.json.get("utente_id"); con = db(); con.execute("DELETE FROM messaggi WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM persone WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM famiglie WHERE id=?", (uid,)); con.execute("DELETE FROM utenti WHERE id=?", (uid,)); con.commit(); con.close(); return jsonify({"ok": True, "msg": "DATI CANCELLATI ✓"})
 @app.route("/stripe_webhook", methods=["POST"])
 def stripe_webhook():
@@ -270,10 +341,7 @@ def stripe_webhook():
     return jsonify({"ok": False})
 @app.route("/admin")
 def admin():
-    if request.args.get("password") != ADMIN_PASSWORD: return "PASSWORD SBAGLIATA", 403
-    con = db()
-    tot = con.execute("SELECT COUNT(*) c FROM famiglie").fetchone()["c"]; prova = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='PROVA'").fetchone()["c"]; pagato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato LIKE 'SBLOCCATO%'").fetchone()["c"]; bloccato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='BLOCCATO'").fetchone()["c"]; mandati = con.execute("SELECT COUNT(*) c FROM messaggi WHERE stato='MANDATO'").fetchone()["c"]; si = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='SI'").fetchone()["c"]; no = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='NO'").fetchone()["c"]; non_risp = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta IS NULL AND stato='MANDATO'").fetchone()["c"]
-    con.close(); return jsonify({"totale_iscritti": tot, "in_prova": prova, "pagato": pagato, "bloccato": bloccato, "messaggi_mandati": mandati, "SI": si, "NO": no, "non_hanno_risposto": non_risp})
+    return redirect("/admin_utenti")
 
 def orologio():
     while True:
@@ -334,14 +402,14 @@ def bot_loop():
                 if "message" in upd:
                     msg = upd["message"]; chat_id = msg["chat"]["id"]; testo = msg.get("text", "")
                     if testo.strip().upper() in ["AVVIA", "AVVIA_START", "START", "CIAO", "HI", "INIZIA"]:
-                        manda_telegram(chat_id, "Ciao! Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
+                        manda_telegram(chat_id, "Ciao! Sono la tua Badante Virtuale ❤️\n\nVuoi configurare la Badante?", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
                     elif testo.startswith("/start"):
                         parti = testo.split(); codice = parti[1] if len(parti) > 1 else ""
                         fam = con.execute("SELECT * FROM famiglie WHERE codice_link=?", (codice,)).fetchone() if codice else None
                         if fam:
                             manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo qui per firmare ed entrare.", {"inline_keyboard": [[{"text": "✅ HO CAPITO - SCRIVO IL CODICE", "callback_data": "AVVIA_START"}]]})
                         else:
-                            manda_telegram(chat_id, "Ciao! 👋 Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?\n\nSe hai già il codice di 6 cifre dal sito, scrivilo qui.", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
+                            manda_telegram(chat_id, "Ciao! 👋 Sono la tua Badante Virtuale ❤️\n\nVuoi configurare la Badante?\n\nSe hai già il codice di 6 cifre dal sito, scrivilo qui.", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
                     elif testo.isdigit() and len(testo) == 6:
                         fam = con.execute("SELECT * FROM famiglie WHERE otp=?", (testo,)).fetchone()
                         if fam:
@@ -424,5 +492,5 @@ def avvia_threads():
 avvia_threads()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
+    print(f"LA TUA BADANTE VIRTUALE ACCESA - Porta {port}")
     app.run(host="0.0.0.0", port=port)
