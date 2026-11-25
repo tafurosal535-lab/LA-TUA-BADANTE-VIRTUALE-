@@ -1,382 +1,428 @@
-import sqlite3, os, json, threading, time, secrets, random, string
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, session, redirect, g, render_template_string
-import requests
+  # BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA V2
+# Start Command su Render: python BADANTE.PY
 
-TOKEN = os.environ.get("TOKEN") or ""
-ADMIN_USER = os.environ.get("ADMIN_USER") or ""
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") or ""
+import os, sqlite3, secrets, threading, time, datetime, json, requests
+from flask import Flask, request, jsonify, render_template_string
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "METTI_QUI_IL_TOKEN_DEL_BOT")
+BOT_NAME = "BadanteVirtualeBot"
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "METTI_PASSWORD_SEGRETA")
+MIA_EMAIL = "nostra-mail-fissa@badante.it"
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-DB = "database.db"
-PREZZO = 5
-DURATA_GIORNI = 30
-BASE = f"https://api.telegram.org/bot{TOKEN}"
 
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
-@app.teardown_appcontext
-def close_db(exc=None):
-    db = g.pop("db", None)
-    if db: db.close()
+def db():
+    c = sqlite3.connect("database.db", check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
 
 def init_db():
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-    cur = con.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS utenti (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT UNIQUE, username TEXT, nome TEXT, creato TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS persone (id INTEGER PRIMARY KEY AUTOINCREMENT, fam_id TEXT, nome TEXT, eta INTEGER, telefono TEXT, via TEXT, citta TEXT, cap TEXT, patologie TEXT, note TEXT, ruolo TEXT, creato TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS famiglie (id TEXT PRIMARY KEY, chat_id TEXT, creata TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS codici (codice TEXT PRIMARY KEY, stato TEXT, creato TEXT, usato_da TEXT, chat_id TEXT, usa_id TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS pagamenti (id INTEGER PRIMARY KEY AUTOINCREMENT, codice TEXT, stato TEXT, creato TEXT, confermato TEXT, chat_id TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS contatori (id INTEGER PRIMARY KEY AUTOINCREMENT, creato TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS trial (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, inizio TEXT, fine TEXT)""")
-    cur.execute("""CREATE TABLE IF NOT EXISTS utenti_admin (id INTEGER PRIMARY KEY AUTOINCREMENT, utente TEXT, chat_id TEXT, famiglia TEXT, stato TEXT, scadenza TEXT, creato TEXT)""")
+    con = db()
+    con.execute("""CREATE TABLE IF NOT EXISTS famiglie(id INTEGER PRIMARY KEY AUTOINCREMENT, codice_link TEXT UNIQUE, otp TEXT, stato TEXT DEFAULT 'PROVA', trial_inizio TEXT, trial_fine TEXT, piano TEXT, pagato_il TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS persone(id INTEGER PRIMARY KEY AUTOINCREMENT, famiglia_id INTEGER, ruolo TEXT, nome TEXT, cognome TEXT, cell TEXT, email TEXT, telegram_id INTEGER, privacy INTEGER DEFAULT 0, verificato INTEGER DEFAULT 0)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS utenti(id INTEGER PRIMARY KEY AUTOINCREMENT, figlio_nome TEXT, figlio_cognome TEXT, figlio_cell TEXT, figlio_email TEXT, mamma_nome TEXT, mamma_cognome TEXT, mamma_cell TEXT, papa_nome TEXT, papa_cognome TEXT, papa_cell TEXT, codice_link TEXT UNIQUE, telegram_figlio_id INTEGER, telegram_mamma_id INTEGER, telegram_papa_id INTEGER, privacy INTEGER DEFAULT 0, otp TEXT, verificato INTEGER DEFAULT 0, trial_inizio TEXT, trial_fine TEXT, stato TEXT DEFAULT 'PROVA', piano TEXT, pagato_il TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS messaggi(id INTEGER PRIMARY KEY AUTOINCREMENT, famiglia_id INTEGER, utente_id INTEGER, destinatario TEXT, testo TEXT, data_invio TEXT, ora_invio TEXT, stato TEXT DEFAULT 'IN_MAGAZZINO', risposta TEXT, creato_il TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS coda(id INTEGER PRIMARY KEY AUTOINCREMENT, messaggio_id INTEGER, tipo TEXT DEFAULT 'NORMALE', tentativi INTEGER DEFAULT 0, creato_il TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS contatti(id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, messaggio TEXT, creato_il TEXT)""")
     con.commit(); con.close()
-
 init_db()
 
-def genera_codice():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-def genera_codice_famiglia():
-    return 'FAM-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
-def salva_persona(fam_id, nome, eta, telefono, via, citta, cap, patologie, note, ruolo):
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-    cur = con.cursor()
-    if not cur.execute("SELECT id FROM famiglie WHERE id=?", (fam_id,)).fetchone():
-        cur.execute("INSERT INTO famiglie (id, chat_id, creata) VALUES (?,?,?)", (fam_id, "", datetime.now().isoformat()))
-    cur.execute("INSERT INTO persone (fam_id, nome, eta, telefono, via, citta, cap, patologie, note, ruolo, creato) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (fam_id, nome, eta, telefono, via, citta, cap, patologie, note, ruolo, datetime.now().isoformat()))
-    con.commit(); pid = cur.lastrowid; con.close()
-    return pid
-
-def conta_utenti():
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-    cur = con.cursor()
-    n = cur.execute("SELECT COUNT(*) FROM utenti").fetchone()[0]
-    con.close(); return n
-
-def crea_codice_pagamento(chat_id):
-    codice = genera_codice()
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-    cur = con.cursor()
-    cur.execute("INSERT INTO codici (codice, stato, creato, usato_da, chat_id, usa_id) VALUES (?,?,?,?,?,?)", (codice, "IN_ATTESA", datetime.now().isoformat(), "", chat_id, ""))
-    cur.execute("INSERT INTO pagamenti (codice, stato, creato, confermato, chat_id) VALUES (?,?,?,?,?)", (codice, "IN_ATTESA", datetime.now().isoformat(), "", chat_id))
-    con.commit(); con.close()
-    return codice
-
-def usa_codice(codice, chat_id, username=""):
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-    cur = con.cursor()
-    r = cur.execute("SELECT * FROM codici WHERE codice=?", (codice,)).fetchone()
-    if not r:
-        con.close(); return ("NON_TROVATO", None)
-    if r["stato"] == "USATO":
-        con.close(); return ("GIA_USATO", None)
-    if r["stato"] != "PAGATO":
-        con.close(); return ("NON_PAGATO", None)
-    cur.execute("UPDATE codici SET stato='USATO', usato_da=?, chat_id=? WHERE codice=?", (chat_id, chat_id, codice))
-    cur.execute("UPDATE pagamenti SET stato='USATO', confermato=? WHERE codice=?", (datetime.now().isoformat(), codice))
-    scadenza = (datetime.now() + timedelta(days=DURATA_GIORNI)).isoformat()
-    cur.execute("INSERT OR REPLACE INTO utenti_admin (utente, chat_id, famiglia, stato, scadenza, creato) VALUES (?,?,?,?,?,?)", (username or chat_id, chat_id, "", "ATTIVO", scadenza, datetime.now().isoformat()))
-    con.commit(); con.close()
-    return ("OK", scadenza)
-
-def is_attivo(chat_id):
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
-    cur = con.cursor()
-    r = cur.execute("SELECT * FROM utenti_admin WHERE chat_id=?", (chat_id,)).fetchone()
-    con.close()
-    if not r: return False
-    if r["stato"] != "ATTIVO": return False
+def manda_telegram(chat_id, testo, bottoni=None):
+    if not BOT_TOKEN or BOT_TOKEN.startswith("METTI_"):
+        print("ERRORE: BOT_TOKEN non messo su Render!")
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": testo}
+    if bottoni: data["reply_markup"] = json.dumps(bottoni)
     try:
-        return datetime.fromisoformat(r["scadenza"]) > datetime.now()
-    except: return False
-
-def tg(method, data=None, files=None):
-    try:
-        if files:
-            return requests.post(f"{BASE}/{method}", data=data, files=files, timeout=20).json()
-        return requests.post(f"{BASE}/{method}", json=data, timeout=20).json()
+        r = requests.post(url, json=data, timeout=10)
+        print("Manda Telegram:", r.status_code)
+        return r.status_code == 200
     except Exception as e:
-        print("TG ERR", e); return {}
+        print("Errore manda_telegram:", e)
+        return False
 
-def invia(chat_id, testo, tastiera=None):
-    d = {"chat_id": chat_id, "text": testo, "parse_mode": "HTML"}
-    if tastiera: d["reply_markup"] = tastiera
-    return tg("sendMessage", d)
-
-def tastiera_pulsanti(righe):
-    return {"inline_keyboard": [[{"text": t, "callback_data": c} for t, c in r] for r in righe]}
-
-orologio_attivo = {}
-def orologio(chat_id, nome=""):
-    while orologio_attivo.get(chat_id):
-        try:
-            invia(chat_id, f"⏰ <b>LA TUA BADANTE VIRTUALE</b>\n\nCiao {nome or 'UTENTE'}! Sono le <b>{datetime.now().strftime('%H:%M')}</b>.\n\nCome stai? Tutto bene? Vuoi dirmi qualcosa? ❤️")
-        except: pass
-        for _ in range(3600):
-            if not orologio_attivo.get(chat_id): break
-            time.sleep(1)
-
-def avvia_orologio(chat_id, nome=""):
-    if orologio_attivo.get(chat_id): return
-    orologio_attivo[chat_id] = True
-    threading.Thread(target=orologio, args=(chat_id, nome), daemon=True).start()
-
-def ferma_orologio(chat_id):
-    orologio_attivo[chat_id] = False
-
-sessioni = {}
-def bot_loop():
-    offset = 0
-    while True:
-        try:
-            r = requests.get(f"{BASE}/getUpdates", params={"offset": offset, "timeout": 20}, timeout=30).json()
-            for up in r.get("result", []):
-                offset = up["update_id"] + 1
-                msg = up.get("message") or up.get("callback_query", {}).get("message")
-                if not msg: continue
-                chat_id = str(msg["chat"]["id"])
-                testo = ""
-                if "text" in msg: testo = msg["text"]
-                elif "caption" in msg: testo = msg["caption"]
-                if "callback_query" in up:
-                    cb = up["callback_query"]
-                    chat_id = str(cb["message"]["chat"]["id"])
-                    data = cb.get("data", "")
-                    if data.startswith("SI_"):
-                        pid = data[3:]
-                        con = sqlite3.connect(DB, timeout=30, check_same_thread=False); cur = con.cursor()
-                        p = cur.execute("SELECT * FROM persone WHERE id=?", (pid,)).fetchone()
-                        if p:
-                            cur.execute("DELETE FROM persone WHERE id=?", (pid,)); con.commit()
-                            invia(chat_id, f"✅ <b>Persona eliminata</b>\n\n{p['nome']} eliminata.")
-                        con.close()
-                    elif data.startswith("NO_"):
-                        invia(chat_id, "❌ Eliminazione annullata.")
-                    elif data == "PAGA":
-                        codice = crea_codice_pagamento(chat_id)
-                        invia(chat_id, f"💳 <b>PAGA {PREZZO}€</b>\n\nFai un bonifico di <b>{PREZZO}€</b> con causale:\n<b>{codice}</b>\n\nDopo il pagamento scrivi il codice qui e premi INVIA.")
-                    elif data == "TRIAL":
-                        con = sqlite3.connect(DB, timeout=30, check_same_thread=False); cur = con.cursor()
-                        esiste = cur.execute("SELECT * FROM trial WHERE chat_id=?", (chat_id,)).fetchone()
-                        if esiste:
-                            invia(chat_id, "⚠️ Hai già usato la prova gratuita.")
-                        else:
-                            fine = (datetime.now() + timedelta(days=3)).isoformat()
-                            cur.execute("INSERT INTO trial (chat_id, inizio, fine) VALUES (?,?,?)", (chat_id, datetime.now().isoformat(), fine))
-                            cur.execute("INSERT OR REPLACE INTO utenti_admin (utente, chat_id, famiglia, stato, scadenza, creato) VALUES (?,?,?,?,?,?)", (chat_id, chat_id, "", "ATTIVO", fine, datetime.now().isoformat()))
-                            con.commit()
-                            invia(chat_id, "🎁 <b>PROVA GRATUITA ATTIVATA - 3 GIORNI</b>\n\nOra puoi usare la Badante per 3 giorni gratis!")
-                        con.close()
-                    elif data == "HELP":
-                        invia(chat_id, "🆘 <b>AIUTO</b>\n\nScrivi /start per ricominciare.\nScrivi AVVIA per cominciare.\nPer cambiare numero scrivi CAMBIA.\nPer pagare scrivi PAGA.")
-                    continue
-                if testo.strip().upper() in ["AVVIA", "START", "/START", "CIAO", "HI"]:
-                    con = sqlite3.connect(DB, timeout=30, check_same_thread=False); cur = con.cursor()
-                    cur.execute("INSERT OR IGNORE INTO utenti (chat_id, username, nome, creato) VALUES (?,?,?,?)", (chat_id, msg.get("from", {}).get("username", ""), msg.get("from", {}).get("first_name", ""), datetime.now().isoformat()))
-                    con.commit(); con.close()
-                    invia(chat_id, "Ciao! Sono la <b>tua Badante Virtuale</b> ❤️\n\nSono qui per aiutarti, parlarti e ricordarti le cose importanti.\n\nVuoi configurare la Badante?\n\nScrivi:\n<b>SI</b> - per configurare\n<b>NO</b> - per parlare subito")
-                    continue
-                elif testo.strip().upper().startswith("/START"):
-                    invia(chat_id, "Ciao! Sono la <b>tua Badante Virtuale</b> ❤️\n\nScrivi <b>AVVIA</b> per cominciare.")
-                    continue
-                elif testo.strip().isdigit() and len(testo.strip()) == 8:
-                    stato, scad = usa_codice(testo.strip(), chat_id, msg.get("from", {}).get("username", ""))
-                    if stato == "OK":
-                        invia(chat_id, f"✅ <b>CODICE ACCETTATO!</b>\n\nBenvenuto UTENTE, sei entrato.\nScadenza: {scad[:10]}\n\nOra puoi usare la Badante!")
-                    elif stato == "GIA_USATO":
-                        invia(chat_id, "⚠️ Questo codice è già stato usato.")
-                    elif stato == "NON_PAGATO":
-                        invia(chat_id, "⏳ Questo codice non è ancora pagato.\nFai il bonifico e riprova.")
-                    else:
-                        invia(chat_id, "❌ Codice non trovato. Controlla e riprova.")
-                    continue
-                elif testo.strip().upper() == "HELP":
-                    invia(chat_id, "🆘 <b>AIUTO</b>\n\nScrivi AVVIA per cominciare.\nScrivi PAGA per pagare.\nScrivi CAMBIA per cambiare numero.")
-                    continue
-                elif "location" in msg:
-                    lat = msg["location"]["latitude"]; lon = msg["location"]["longitude"]
-                    invia(chat_id, f"📍 <b>POSIZIONE RICEVUTA</b>\n\nGrazie! Ho salvato la tua posizione:\nhttps://www.google.com/maps?q={lat},{lon}\n\nSe hai bisogno, chiamo subito aiuto!")
-                    continue
-                elif "contact" in msg:
-                    tel = msg["contact"].get("phone_number", "")
-                    invia(chat_id, f"📞 <b>NUMERO RICEVUTO: {tel}</b>\n\nGrazie! Ho salvato il tuo numero.")
-                    continue
-                elif testo.strip().upper() == "SI":
-                    sessioni[chat_id] = {"step": "nome"}
-                    invia(chat_id, "Perfetto! Cominciamo ❤️\n\nCome si chiama la persona da assistere?\nScrivi solo il nome.")
-                    continue
-                elif testo.strip().upper() == "NO":
-                    invia(chat_id, "Va bene, parliamo subito! ❤️\n\nDimmi pure, come stai oggi? Come ti senti?")
-                    continue
-                elif testo.strip().upper() == "PAGA":
-                    codice = crea_codice_pagamento(chat_id)
-                    invia(chat_id, f"💳 <b>PAGA {PREZZO}€</b>\n\nFai un bonifico di <b>{PREZZO}€</b> con causale:\n<b>{codice}</b>\n\nDopo il pagamento, scrivi il codice qui e premi INVIA.")
-                    continue
-                elif testo.strip().upper() == "CAMBIA":
-                    invia(chat_id, "🔄 <b>CAMBIA NUMERO</b>\n\nCondividi il nuovo numero premendo il pulsante qui sotto, oppure scrivi il nuovo numero con +39 davanti.\n\nEsempio: +39 333 1234567")
-                    continue
-                elif testo.strip().upper().startswith("+39") or testo.strip().upper().startswith("0039"):
-                    invia(chat_id, f"✅ <b>NUMERO AGGIORNATO</b>\n\nHo salvato il nuovo numero: {testo.strip()}\n\nOra sei a posto!")
-                    continue
-                elif testo.strip().upper() == "SOS":
-                    con = sqlite3.connect(DB, timeout=30, check_same_thread=False); cur = con.cursor()
-                    pers = cur.execute("SELECT * FROM persone ORDER BY id LIMIT 1").fetchone()
-                    con.close()
-                    if pers:
-                        invia(chat_id, f"🚨 <b>SOS ATTIVATO!</b>\n\nSto chiamando: {pers['nome']} - {pers['telefono']}\n\nChiamalo subito!\n\nSe è un'emergenza vera chiama il 112!")
-                    else:
-                        invia(chat_id, "🚨 <b>SOS</b>\n\nNon ho un numero salvato.\nScrivi CAMBIA per aggiungere un numero.\n\nSe è un'emergenza chiama il 112!")
-                    continue
-                elif chat_id in sessioni:
-                    s = sessioni[chat_id]
-                    if s["step"] == "nome":
-                        s["nome"] = testo.strip(); s["step"] = "eta"
-                        invia(chat_id, f"Bene, {s['nome']} ❤️\n\nQuanti anni ha? Scrivi solo il numero, esempio: 82")
-                    elif s["step"] == "eta":
-                        try: s["eta"] = int(testo.strip())
-                        except: s["eta"] = 0
-                        s["step"] = "telefono"
-                        invia(chat_id, "Qual è il numero di telefono?\nScrivi con +39 davanti, esempio: +39 333 1234567")
-                    elif s["step"] == "telefono":
-                        s["telefono"] = testo.strip(); s["step"] = "via"
-                        invia(chat_id, "Qual è la via? Esempio: Via Roma 10")
-                    elif s["step"] == "via":
-                        s["via"] = testo.strip(); s["step"] = "citta"
-                        invia(chat_id, "In che città abita? Esempio: Napoli")
-                    elif s["step"] == "citta":
-                        s["citta"] = testo.strip(); s["step"] = "cap"
-                        invia(chat_id, "Qual è il CAP? Esempio: 80100")
-                    elif s["step"] == "cap":
-                        s["cap"] = testo.strip(); s["step"] = "patologie"
-                        invia(chat_id, "Ha qualche malattia o patologia? Scrivi tutto, oppure scrivi NESSUNA")
-                    elif s["step"] == "patologie":
-                        s["patologie"] = testo.strip(); s["step"] = "note"
-                        invia(chat_id, "Vuoi aggiungere note? Esempio: prende medicine alle 8. Oppure scrivi NESSUNA")
-                    elif s["step"] == "note":
-                        s["note"] = testo.strip()
-                        fam = genera_codice_famiglia()
-                        pid = salva_persona(fam, s.get("nome",""), s.get("eta",0), s.get("telefono",""), s.get("via",""), s.get("citta",""), s.get("cap",""), s.get("patologie",""), s.get("note",""), "ASSISTITO")
-                        del sessioni[chat_id]
-                        invia(chat_id, f"✅ <b>CONFIGURAZIONE FINITA!</b>\n\nHo salvato:\n👤 {s.get('nome')}\n📞 {s.get('telefono')}\n📍 {s.get('via')}, {s.get('citta')} {s.get('cap')}\n\nOra sono la tua Badante! ❤️\nScrivi pure, parliamo!")
-                    continue
-                else:
-                    if is_attivo(chat_id):
-                        invia(chat_id, f"Ciao! Ho capito: \"{testo}\"\n\nSono la tua Badante Virtuale, sono qui con te ❤️\nDimmi pure, ti ascolto.")
-                    else:
-                        invia(chat_id, "🔒 <b>DEVI PAGARE PER USARE LA BADANTE</b>\n\nPer parlare con la Badante devi fare la prova gratuita o pagare.\n\nPremi qui sotto:", tastiera_pulsanti([[("🎁 PROVA GRATIS 3 GIORNI", "TRIAL"), ("💳 PAGA 5€", "PAGA")], [("🆘 AIUTO", "HELP")]]))
-                    continue
-        except Exception as e:
-            print("LOOP ERR", e); time.sleep(2)
-
-HTML_UTENTI = """
-<!DOCTYPE html><html lang="it"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>La Tua Badante Virtuale</title>
-<style>body{font-family:Arial;background:#fff5f5;margin:0;padding:16px} .box{max-width:520px;margin:auto;background:white;border-radius:16px;padding:20px;box-shadow:0 4px 20px #0001} h1{color:#d6336c;text-align:center} input,textarea{width:100%;padding:12px;margin:6px 0;border:1px solid #ddd;border-radius:10px;font-size:16px;box-sizing:border-box} button{width:100%;padding:14px;background:#d6336c;color:white;border:0;border-radius:12px;font-size:17px;font-weight:bold} .small{font-size:13px;color:#666;text-align:center} .msg{padding:10px;border-radius:10px;margin:8px 0;background:#ffeef3} .bot{background:#ffeef3} .tu{background:#e7f5ff;text-align:right}</style></head>
-<body><div class="box"><h1>❤️ La Tua Badante Virtuale</h1><p class="small">LA TUA BADANTE VIRTUALE è un servizio a pagamento.<br>Prova gratis 3 giorni, poi 5€ al mese.<br>Scrivi qui, ti risponde la Badante.</p>
-<input id="nome" placeholder="Il tuo nome"><input id="tel" placeholder="Il tuo telefono +39..."><input id="dest" placeholder="Numero a cui inviare (es. +39...)"><textarea id="txt" rows="3" placeholder="Scrivi il messaggio..."></textarea><button onclick="invia()">📩 INVIA MESSAGGIO</button><p class="small" id="stato"></p><div id="chat"></div><hr><h3>📞 SOS / Chiama</h3><button onclick="sos()" style="background:#c92a2a">🚨 SOS - CHIAMA AIUTO</button><hr><h3>💳 Paga 5€</h3><button onclick="paga()" style="background:#2b8a3e">💳 PAGA 5€ - BONIFICO</button><p class="small">Dopo il pagamento ti arriva il codice. Scrivilo nel bot Telegram.</p></div>
+HTML = """
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>LA TUA BADANTE VIRTUALE</title>
+<style>body{font-family:Arial;text-align:center}h1{font-size:22px}.finestra{border:2px solid #333;display:inline-block;width:340px;margin:10px;padding:15px;vertical-align:top}input,select{width:92%;padding:10px;margin:5px;font-size:16px}button{padding:12px 20px;font-size:16px;margin:5px;cursor:pointer}.verde{color:green}.rosso{color:red}.bloccato{opacity:0.5;pointer-events:none}.boxmsg{border:2px solid #333;display:inline-block;width:340px;margin:5px;padding:10px;vertical-align:top}</style></head><body>
+<h1>LA TUA BADANTE VIRTUALE è un servizio di promemoria. NON sostituiamo il medico.</h1>
+<div id="stato">SBLOCCATO</div>
+<div class="finestra" id="boxIscrizione"><h2>UTENTE</h2>
+<p>Utente <span id="numPersona">1</span> di 2</p>
+<input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="email" placeholder="Email"><input id="cell" placeholder="Numero Cell"><br>
+<div id="boxPrivacy" style="display:none"><label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br></div>
+<button id="btnSalva" onclick="salvaPersona()">SALVA UTENTE</button>
+<div id="r1"></div><div id="linkbox"></div>
+<div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ FATTO - ISCRIZIONE FATTA</div>
+</div>
+<br><button onclick="apri('fcont')">CONTATTI</button>
+<div id="fcont" style="display:none"><textarea id="msgCont" style="width:80%;height:100px" placeholder="Scrivi qui - Se vuoi cancellare i tuoi dati scrivi CANCELLAMI"></textarea><br><button onclick="inviaContatto()">INVIO</button><div id="rc"></div></div>
+<div style="margin-top:15px"><h2>Scrivi Messaggio</h2>
+<div class="boxmsg"><p>1 - SCRIVI MESSAGGIO</p><input id="testo" placeholder="Es: Hai preso la medicina delle 9?"></div>
+<div class="boxmsg"><p>2 - SCEGLI GIORNO E ORA - CALENDARIO</p><input id="dataora" type="datetime-local"><br><small>Puoi mandare tra 1 minuto o tra 3 mesi</small></div>
+<div class="boxmsg"><p>3 - A CHI VA?</p><select id="dest"><option>UTENTE 2</option><option>UTENTE 1</option></select></div>
+<div class="boxmsg"><p>4 - INVIA</p><button onclick="salvaMessaggio()">INVIA</button><div id="rm"></div></div>
+<div id="lista"></div></div>
+<div><h2>🆘 SOS + POSIZIONE</h2><p>Premi SOS e manda la tua posizione all'altro utente.</p><button onclick="mandaSOS()" style="background:red;color:white;font-size:20px;padding:15px 30px">🆘 SOS - MANDA POSIZIONE</button><div id="rSOS"></div></div>
+<div class="finestra" id="boxCambioNumero"><h2>CAMBIA NUMERO</h2><input id="nomeCambio" placeholder="Nome"><input id="cognomeCambio" placeholder="Cognome"><input id="emailCambio" placeholder="Email"><input id="vecchioNum" placeholder="Cellulare Vecchio"><input id="nuovoNum" placeholder="Cellulare Nuovo"><button id="btnCambia" onclick="cambiaNumero()">CAMBIA NUMERO</button><div id="rCambio"></div><div id="spuntaCambio" style="display:none;font-size:30px;color:green">✅ FATTO</div></div>
+<div><h2>SBLOCCA - PAGA ORA</h2><button onclick="paga('1 MESE')">1 MESE - 9,90 euro</button><button onclick="paga('3 MESI')">3 MESI - 24,90 euro</button><button onclick="paga('12 MESI')">12 MESI - 89,90 euro</button><p>Paga con Carta o PayPal</p></div>
 <script>
-function invia(){let n=document.getElementById('nome').value, t=document.getElementById('tel').value, d=document.getElementById('dest').value, m=document.getElementById('txt').value; if(!m){alert('Scrivi un messaggio');return;} document.getElementById('stato').innerText='Invio...'; fetch('/api/invia',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:n,telefono:t,destinatario:d,messaggio:m})}).then(r=>r.json()).then(j=>{document.getElementById('stato').innerText=j.messaggio||'Inviato!'; let c=document.getElementById('chat'); c.innerHTML+='<div class="msg tu">'+m+'</div>'; document.getElementById('txt').value='';});}
-function sos(){let d=document.getElementById('dest').value; if(!d){alert('Scrivi il numero a cui inviare SOS');return;} fetch('/api/sos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({destinatario:d})}).then(r=>r.json()).then(j=>{alert(j.messaggio||'SOS inviato');});}
-function paga(){fetch('/api/paga',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}).then(r=>r.json()).then(j=>{alert('Codice pagamento: '+(j.codice||'')+'\\nFai bonifico 5€ con questa causale.');});}
+let FAMIGLIA_ID=null;
+let FASE=1;
+function apri(id){let e=document.getElementById(id); e.style.display=e.style.display=='none'?'block':'none';}
+function bloccaIscrizione(){
+  document.getElementById('boxIscrizione').classList.add('bloccato');
+  document.getElementById('spuntaVerde').style.display='block';
+  document.getElementById('btnSalva').disabled=true;
+  document.getElementById('priv1').disabled=true;
+  document.getElementById('nome').disabled=true;
+  document.getElementById('cognome').disabled=true;
+  document.getElementById('cell').disabled=true;
+  document.getElementById('email').disabled=true;
+}
+function bloccaCambio(){
+  document.getElementById('boxCambioNumero').classList.add('bloccato');
+  document.getElementById('spuntaCambio').style.display='block';
+  document.getElementById('btnCambia').disabled=true;
+  document.getElementById('nomeCambio').disabled=true;
+  document.getElementById('cognomeCambio').disabled=true;
+  document.getElementById('emailCambio').disabled=true;
+  document.getElementById('vecchioNum').disabled=true;
+  document.getElementById('nuovoNum').disabled=true;
+}
+async function salvaPersona(){
+ // FASE 1 = UTENTE 1 - senza privacy ancora
+ if(FASE==1){
+   if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL");return;}
+   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
+   document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
+   if(r.ok){
+     FAMIGLIA_ID=r.famiglia_id;
+     document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b>';
+     // PASSA A UTENTE 2
+     FASE=2;
+     document.getElementById('numPersona').innerText='2';
+     document.getElementById('r1').innerText='✅ PRIMO UTENTE SALVATO. Ora inserisci il SECONDO UTENTE.';
+     nome.value=''; cognome.value=''; cell.value=''; email.value='';
+     document.getElementById('boxPrivacy').style.display='block';
+     document.getElementById('btnSalva').innerText='SALVA - FINE ISCRIZIONE';
+     caricaLista();
+   }
+   return;
+ }
+ // FASE 2 = UTENTE 2 - QUI SERVE PRIVACY + 2 UTENTI OBBLIGATORI
+ if(FASE==2){
+   if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL - INSERISCI UTENTE 2");return;}
+   if(!document.getElementById('priv1').checked){alert("DEVI METTERE LA SPUNTA PRIVACY PER FINIRE");return;}
+   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
+   document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
+   if(r.ok){
+     if(r.quante<2){alert("INSERISCI UTENTE 2");return;}
+     document.getElementById('r1').innerText='✅ 2 UTENTI ISCRITTI. Iscrizione chiusa.';
+     bloccaIscrizione();
+     caricaLista();
+   }
+   return;
+ }
+}
+async function salvaMessaggio(){
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti con 2 UTENTI");return;}
+ if(!testo.value){alert("SCRIVI IL MESSAGGIO");return;}
+ if(!dataora.value){alert("SCEGLI GIORNO E ORA DAL CALENDARIO");return;}
+ // dataora = 2026-11-25T15:30 -> dividiamo in data e ora
+ let parti = dataora.value.split('T');
+ let dataScelta = parti[0];
+ let oraScelta = parti[1].substring(0,5);
+ if(!confirm("HAI SCRITTO: "+testo.value+" - IL GIORNO "+dataScelta+" ALLE "+oraScelta+" - È CORRETTO? SI / NO")) return;
+ let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:dataScelta,[STRIPPED]
+ document.getElementById('rm').innerText=r.msg; if(r.ok) caricaLista();
+}
+async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
+async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
+async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:dataora.value.split('T')[0],[STRIPPED] caricaLista(); }
+async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
+async function cambiaNumero(){
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
+ if(!nomeCambio.value || !cognomeCambio.value || !emailCambio.value || !vecchioNum.value || !nuovoNum.value){alert("MANCA NOME / COGNOME / EMAIL / CELLULARE VECCHIO / CELLULARE NUOVO");return;}
+ let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,nome:nomeCambio.value,cognome:cognomeCambio.value,email:emailCambio.value,vecchio_numero:vecchioNum.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json());
+ document.getElementById('rCambio').innerText=r.msg; document.getElementById('rCambio').className=r.ok?'verde':'rosso';
+ if(r.ok){ bloccaCambio(); }
+}
+async function paga(piano){alert("Paghi "+piano+" con Carta o PayPal. Dopo il pagamento Stripe manda WEBHOOK e ti sblocca in 1-2 minuti.");}
+async function mandaSOS(){
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
+ if(!navigator.geolocation){alert("Questo telefono non manda la posizione");return;}
+ document.getElementById('rSOS').innerText="Sto prendendo la posizione...";
+ navigator.geolocation.getCurrentPosition(async function(pos){
+   let lat=pos.coords.latitude, lon=pos.coords.longitude;
+   let r=await fetch('/sos_posizione',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,lat:lat,lon:lon})}).then(x=>x.json());
+   document.getElementById('rSOS').innerText=r.msg;
+ }, function(){ document.getElementById('rSOS').innerText="Devi premere CONSENTI alla posizione"; });
+}
 </script></body></html>
 """
 
 @app.route("/")
-def home():
-    return render_template_string(HTML_UTENTI)
+def home(): return render_template_string(HTML)
 
-@app.route("/api/invia", methods=["POST"])
-def api_invia():
-    d = request.get_json(force=True, silent=True) or {}
-    return jsonify({"ok": True, "messaggio": f"Messaggio da {d.get('nome','UTENTE')} inviato alla Badante! La Badante ti risponderà presto."})
+@app.route("/health")
+def health(): return "OK", 200
 
-@app.route("/api/sos", methods=["POST"])
-def api_sos():
-    return jsonify({"ok": True, "messaggio": "SOS inviato! La Badante chiama subito il numero."})
+@app.route("/salva_persona", methods=["POST"])
+def salva_persona():
+    d = request.json
+    if not all([d.get("nome"), d.get("cognome"), d.get("cell")]): return jsonify({"ok": False, "msg": "MANCA QUALCOSA, CONTROLLA"})
+    con = db()
+    fam_id = d.get("famiglia_id")
+    if not fam_id:
+        codice = secrets.token_hex(4); ora = datetime.datetime.now(); fine = ora + datetime.timedelta(days=7); otp = str(secrets.randbelow(900000)+100000)
+        cur = con.execute("INSERT INTO famiglie(codice_link,otp,trial_inizio,trial_fine,stato) VALUES(?,?,?,?,?)", (codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
+        fam_id = cur.lastrowid
+        con.execute("INSERT INTO utenti(figlio_nome,figlio_cognome,figlio_cell,figlio_email,codice_link,otp,trial_inizio,trial_fine,stato,privacy) VALUES(?,?,?,?,?,?,?,?,?,1)", (d["nome"], d["cognome"], d["cell"], d.get("email",""), codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
+    else:
+        row = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
+        if not row: return jsonify({"ok": False, "msg": "FAMIGLIA NON TROVATA"})
+        codice = row["codice_link"]; otp = row["otp"]
+    cnt = con.execute("SELECT COUNT(*) c FROM persone WHERE famiglia_id=?", (fam_id,)).fetchone()["c"]
+    if cnt >= 2:
+        con.close(); return jsonify({"ok": False, "msg": "GIA' 2 UTENTI - NON PUOI AGGIUNGERNE ALTRI"})
+    ruolo = f"UTENTE {cnt+1}"
+    con.execute("INSERT INTO persone(famiglia_id,ruolo,nome,cognome,cell,email,privacy) VALUES(?,?,?,?,?,?,1)", (fam_id, ruolo, d["nome"], d["cognome"], d["cell"], d.get("email","")))
+    con.commit()
+    quante = con.execute("SELECT COUNT(*) c FROM persone WHERE famiglia_id=?", (fam_id,)).fetchone()["c"]
+    con.close()
+    link = f"https://t.me/{BOT_NAME}?start={codice}"
+    return jsonify({"ok": True, "msg": "SALVATO ✓" if quante==1 else "SECONDO UTENTE SALVATO ✓", "famiglia_id": fam_id, "quante": quante, "link": link, "codice": codice, "otp": otp})
 
-@app.route("/api/paga", methods=["POST"])
-def api_paga():
-    codice = genera_codice()
-    con = sqlite3.connect(DB, timeout=30, check_same_thread=False); cur = con.cursor()
-    cur.execute("INSERT INTO codici (codice, stato, creato, usato_da, chat_id, usa_id) VALUES (?,?,?,?,?,?)", (codice, "IN_ATTESA", datetime.now().isoformat(), "", "", ""))
-    cur.execute("INSERT INTO pagamenti (codice, stato, creato, confermato, chat_id) VALUES (?,?,?,?,?)", (codice, "IN_ATTESA", datetime.now().isoformat(), "", ""))
-    con.commit(); con.close()
-    return jsonify({"ok": True, "codice": codice})
+@app.route("/salva_figlio", methods=["POST"])
+def salva_figlio(): return salva_persona()
+@app.route("/salva_genitore", methods=["POST"])
+def salva_genitore(): return jsonify({"ok": True, "msg": "ORA USA LA FINESTRA UTENTE"})
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    return jsonify({"ok": True})
+@app.route("/sos_posizione", methods=["POST"])
+def sos_posizione():
+    d = request.json; fam_id = d.get("famiglia_id"); lat=d.get("lat"); lon=d.get("lon")
+    if not fam_id or lat is None: return jsonify({"ok": False, "msg": "MANCA POSIZIONE"})
+    con = db(); persone = con.execute("SELECT * FROM persone WHERE famiglia_id=?", (fam_id,)).fetchall(); con.close()
+    link_maps = f"https://www.google.com/maps?q={lat},{lon}"
+    testo = f"🆘 SOS! POSIZIONE: {link_maps} - Chiamalo subito!"
+    for p in persone:
+        if p["telegram_id"]: manda_telegram(p["telegram_id"], testo)
+    return jsonify({"ok": True, "msg": f"SOS + POSIZIONE MANDATO ✓ {link_maps}"})
 
-HTML_LOGIN = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin Login</title><style>body{font-family:Arial;background:#f1f3f5;display:flex;justify-content:center;padding:20px} .box{background:white;padding:24px;border-radius:16px;width:100%;max-width:360px;box-shadow:0 4px 20px #0002} input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;border-radius:10px} button{width:100%;padding:13px;background:#1971c2;color:white;border:0;border-radius:12px;font-weight:bold}</style></head><body><div class="box"><h2>🔐 Admin Badante</h2><form method="POST"><input name="utente" placeholder="Utente" required><input name="password" type="password" placeholder="Password" required><button>ENTRA</button></form><p style="color:red">{{err}}</p></div></body></html>
-"""
-HTML_ADMIN = """
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin Utenti</title><style>body{font-family:Arial;background:#f8f9fa;padding:16px} table{width:100%;background:white;border-collapse:collapse} th,td{padding:10px;border:1px solid #eee;text-align:left;font-size:14px} button{padding:10px 14px;border:0;border-radius:10px;color:white;font-weight:bold} .ok{background:#2b8a3e} .no{background:#c92a2a} input{padding:10px;border:1px solid #ddd;border-radius:10px;width:140px}</style></head><body><h2>👥 Admin - Utenti Badante</h2><p>Totale utenti Telegram: <b>{{tot}}</b></p><p><a href="/admin/logout">Esci</a></p>
-<h3>➕ Aggiungi codice pagato</h3><form method="POST" action="/admin/aggiungi"><input name="codice" placeholder="Codice es. ABC12345" required><button class="ok" type="submit">AGGIUNGI COME PAGATO</button></form>
-<h3>📋 Codici e Pagamenti</h3><table><tr><th>Codice</th><th>Stato</th><th>Creato</th><th>Chat</th><th>Azione</th></tr>{% for c in codici %}<tr><td>{{c.codice}}</td><td>{{c.stato}}</td><td>{{c.creato[:16]}}</td><td>{{c.chat_id}}</td><td>{% if c.stato!='PAGATO' %}<form method="POST" action="/admin/paga/{{c.codice}}" style="display:inline"><button class="ok">SEGNA PAGATO</button></form>{% endif %}</td></tr>{% endfor %}</table>
-<h3>👤 Utenti Admin</h3><table><tr><th>Utente</th><th>Chat</th><th>Stato</th><th>Scadenza</th></tr>{% for u in utenti %}<tr><td>{{u.utente}}</td><td>{{u.chat_id}}</td><td>{{u.stato}}</td><td>{{u.scadenza[:16] if u.scadenza else ''}}</td></tr>{% endfor %}</table>
-<h3>🧑‍🤝‍🧑 Persone Salvate</h3><table><tr><th>Nome</th><th>Telefono</th><th>Città</th><th>Famiglia</th><th>Azione</th></tr>{% for p in persone %}<tr><td>{{p.nome}}</td><td>{{p.telefono}}</td><td>{{p.citta}}</td><td>{{p.fam_id}}</td><td><form method="POST" action="/admin/elimina_persona/{{p.id}}"><button class="no">ELIMINA</button></form></td></tr>{% endfor %}</table></body></html>
-"""
+@app.route("/salva_messaggio", methods=["POST"])
+def salva_messaggio():
+    d = request.json; con = db()
+    fam_id = d.get("famiglia_id") or d.get("utente_id")
+    u = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
+    if not u: return jsonify({"ok": False, "msg": "UTENTE NON TROVATO"})
+    if u["stato"] == "BLOCCATO": return jsonify({"ok": False, "msg": "SEI BLOCCATO, PREMI SBLOCCA - PAGA ORA"})
+    # MAX 10 AL GIORNO PER UTENTE (destinatario)
+    cnt = con.execute("SELECT COUNT(*) c FROM messaggi WHERE famiglia_id=? AND data_invio=? AND destinatario=?", (fam_id, d["data"], d["destinatario"])).fetchone()["c"]
+    if cnt >= 10: return jsonify({"ok": False, "msg": "HAI GIÀ 10 MESSAGGI PER OGGI PER QUESTO UTENTE"})
+    try: ora_scelta = datetime.datetime.strptime(f"{d['data']} {d['ora']}", "%Y-%m-%d %H:%M")
+    except: return jsonify({"ok": False, "msg": "DATA O ORA SBAGLIATA"})
+    if ora_scelta < datetime.datetime.now(): return jsonify({"ok": False, "msg": "ATTENZIONE, hai sbagliato tu, l'ora è già passata, scegli un'ora futura"})
+    con.execute("INSERT INTO messaggi(famiglia_id,utente_id,destinatario,testo,data_invio,ora_invio,creato_il) VALUES(?,?,?,?,?,?,?)", (fam_id, fam_id, d["destinatario"], d["testo"], d["data"], d["ora"], datetime.datetime.now().isoformat()))
+    con.commit(); con.close(); return jsonify({"ok": True, "msg": "SALVATO IN MAGAZZINO ✓"})
 
-@app.route("/admin", methods=["GET"])
-def admin_redirect():
-    return redirect("/admin_utenti")
+@app.route("/lista_messaggi/<int:uid>")
+def lista_messaggi(uid):
+    con = db(); rows = con.execute("SELECT * FROM messaggi WHERE famiglia_id=? OR utente_id=? ORDER BY data_invio, ora_invio", (uid, uid)).fetchall(); con.close(); return jsonify([dict(r) for r in rows])
+@app.route("/modifica_messaggio", methods=["POST"])
+def modifica_messaggio():
+    d = request.json; con = db(); con.execute("UPDATE messaggi SET testo=?, data_invio=?, ora_invio=? WHERE id=?", (d["testo"], d["data"], d["ora"], d["id"])); con.commit(); con.close(); return jsonify({"ok": True})
+@app.route("/cancella_messaggio", methods=["POST"])
+def cancella_messaggio():
+    con = db(); con.execute("DELETE FROM messaggi WHERE id=?", (request.json["id"],)); con.commit(); con.close(); return jsonify({"ok": True})
+@app.route("/cambia_numero", methods=["POST"])
+def cambia_numero():
+    d = request.json; con = db()
+    nome = (d.get("nome") or "").strip().lower()
+    cognome = (d.get("cognome") or "").strip().lower()
+    email = (d.get("email") or "").strip().lower()
+    vecchio = (d.get("vecchio_numero") or "").strip()
+    nuovo = (d.get("nuovo_numero") or "").strip()
+    fam_id = d.get("utente_id")
+    if not nome or not cognome or not email or not vecchio or not nuovo or not fam_id:
+        con.close(); return jsonify({"ok": False, "msg": "MANCA NOME / COGNOME / EMAIL / CELLULARE VECCHIO / CELLULARE NUOVO"})
+    pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? AND LOWER(TRIM(nome))=? AND LOWER(TRIM(cognome))=? AND LOWER(TRIM(email))=? AND TRIM(cell)=?", (fam_id, nome, cognome, email, vecchio)).fetchone()
+    if not pers:
+        con.close(); return jsonify({"ok": False, "msg": "DATI SBAGLIATI - NOME / COGNOME / EMAIL / CELLULARE VECCHIO NON COMBACIANO - SI BLOCCA TUTTO"})
+    con.execute("UPDATE persone SET cell=?, telegram_id=NULL WHERE id=?", (nuovo, pers["id"]))
+    con.commit(); con.close(); return jsonify({"ok": True, "msg": "NUMERO CAMBIATO ✓ DEVE FARE DI NUOVO CONDIVIDI NUMERO"})
+@app.route("/contatti", methods=["POST"])
+def contatti():
+    d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close(); return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
+@app.route("/cancella_tutto", methods=["POST"])
+def cancella_tutto():
+    # Tenuto solo per noi, non c'è più bottone sul sito. Si usa via CONTATTI se uno scrive CANCELLAMI
+    uid = request.json.get("famiglia_id") or request.json.get("utente_id"); con = db(); con.execute("DELETE FROM messaggi WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM persone WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM famiglie WHERE id=?", (uid,)); con.execute("DELETE FROM utenti WHERE id=?", (uid,)); con.commit(); con.close(); return jsonify({"ok": True, "msg": "DATI CANCELLATI ✓"})
+@app.route("/stripe_webhook", methods=["POST"])
+def stripe_webhook():
+    d = request.json
+    if d.get("stato") == "pagato":
+        con = db(); con.execute("UPDATE famiglie SET stato='SBLOCCATO - PAGATO', piano=?, pagato_il=? WHERE id=?", (d.get("piano"), datetime.datetime.now().isoformat(), d["utente_id"])); con.commit()
+        pers = con.execute("SELECT * FROM persone WHERE famiglia_id=?", (d["utente_id"],)).fetchall(); con.close()
+        for p in pers:
+            if p["telegram_id"]: manda_telegram(p["telegram_id"], "PAGAMENTO RICEVUTO ✓ Servizio SBLOCCATO.")
+        return jsonify({"ok": True})
+    return jsonify({"ok": False})
+@app.route("/admin")
+def admin():
+    if request.args.get("password") != ADMIN_PASSWORD: return "PASSWORD SBAGLIATA", 403
+    con = db()
+    tot = con.execute("SELECT COUNT(*) c FROM famiglie").fetchone()["c"]; prova = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='PROVA'").fetchone()["c"]; pagato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato LIKE 'SBLOCCATO%'").fetchone()["c"]; bloccato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='BLOCCATO'").fetchone()["c"]; mandati = con.execute("SELECT COUNT(*) c FROM messaggi WHERE stato='MANDATO'").fetchone()["c"]; si = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='SI'").fetchone()["c"]; no = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='NO'").fetchone()["c"]; non_risp = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta IS NULL AND stato='MANDATO'").fetchone()["c"]
+    con.close(); return jsonify({"totale_iscritti": tot, "in_prova": prova, "pagato": pagato, "bloccato": bloccato, "messaggi_mandati": mandati, "SI": si, "NO": no, "non_hanno_risposto": non_risp})
 
-@app.route("/admin_utenti", methods=["GET", "POST"])
-def admin_utenti():
-    if not ADMIN_USER or not ADMIN_PASSWORD:
-        return "Admin non configurato. Metti ADMIN_USER e ADMIN_PASSWORD su Render.", 500
-    err = ""
-    if request.method == "POST":
-        if request.form.get("utente") == ADMIN_USER and request.form.get("password") == ADMIN_PASSWORD:
-            session["admin"] = True
-            return redirect("/admin_utenti")
-        err = "Login o password sbagliata"
-    if not session.get("admin"):
-        return render_template_string(HTML_LOGIN, err=err)
-    db = get_db()
-    codici = db.execute("SELECT * FROM codici ORDER BY creato DESC LIMIT 100").fetchall()
-    utenti = db.execute("SELECT * FROM utenti_admin ORDER BY creato DESC LIMIT 100").fetchall()
-    persone = db.execute("SELECT * FROM persone ORDER BY creato DESC LIMIT 100").fetchall()
-    return render_template_string(HTML_ADMIN, tot=conta_utenti(), codici=codici, utenti=utenti, persone=persone)
+def orologio():
+    while True:
+        try:
+            con = db(); ora = datetime.datetime.now()
+            con.execute("UPDATE famiglie SET stato='BLOCCATO' WHERE stato='PROVA' AND trial_fine < ?", (ora.isoformat(),)); con.commit()
+            oggi = ora.strftime("%Y-%m-%d"); ora_min = ora.strftime("%H:%M")
+            rows = con.execute("SELECT * FROM messaggi WHERE data_invio=? AND ora_invio=? AND stato='IN_MAGAZZINO'", (oggi, ora_min)).fetchall()
+            for m in rows:
+                con.execute("INSERT INTO coda(messaggio_id,tipo,creato_il) VALUES(?,?,?)", (m["id"], "NORMALE", ora.isoformat())); con.execute("UPDATE messaggi SET stato='IN_FILA' WHERE id=?", (m["id"],))
+            con.commit(); con.close()
+        except Exception as e: print("Errore orologio:", e)
+        time.sleep(60)
 
-@app.route("/admin/logout")
-def admin_logout():
-    session.pop("admin", None); return redirect("/admin_utenti")
+def fila():
+    while True:
+        try:
+            con = db()
+            item = con.execute("SELECT * FROM coda ORDER BY CASE WHEN tipo='HELP' THEN 0 ELSE 1 END, id ASC LIMIT 1").fetchone()
+            if item:
+                m = con.execute("SELECT * FROM messaggi WHERE id=?", (item["messaggio_id"],)).fetchone()
+                if m:
+                    fam = con.execute("SELECT * FROM famiglie WHERE id=?", (m["famiglia_id"] or m["utente_id"],)).fetchone()
+                    if fam and fam["stato"] != "BLOCCATO":
+                        pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? AND ruolo=?", (fam["id"], m["destinatario"])).fetchone()
+                        if not pers: pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? ORDER BY id DESC LIMIT 1", (fam["id"],)).fetchone()
+                        chat_id = pers["telegram_id"] if pers else None
+                        if chat_id:
+                            bottoni = {"inline_keyboard": [[{"text": "SI", "callback_data": f"SI_{m['id']}"}, {"text": "NO", "callback_data": f"NO_{m['id']}"}]]}
+                            ok = manda_telegram(chat_id, m["testo"], bottoni)
+                            if ok: con.execute("UPDATE messaggi SET stato='MANDATO' WHERE id=?", (m["id"],)); con.execute("DELETE FROM coda WHERE id=?", (item["id"],))
+                            else:
+                                if item["tentativi"] >= 3: con.execute("DELETE FROM coda WHERE id=?", (item["id"],))
+                                else: con.execute("UPDATE coda SET tentativi=tentativi+1 WHERE id=?", (item["id"],))
+                        else: con.execute("DELETE FROM coda WHERE id=?", (item["id"],))
+                    else: con.execute("DELETE FROM coda WHERE id=?", (item["id"],))
+                else: con.execute("DELETE FROM coda WHERE id=?", (item["id"],))
+                con.commit()
+            con.close()
+        except Exception as e: print("Errore fila:", e)
+        time.sleep(1)
 
-@app.route("/admin/paga/<codice>", methods=["POST"])
-def admin_paga(codice):
-    if not session.get("admin"): return redirect("/admin_utenti")
-    db = get_db()
-    db.execute("UPDATE codici SET stato='PAGATO' WHERE codice=?", (codice,))
-    db.execute("UPDATE pagamenti SET stato='PAGATO', confermato=? WHERE codice=?", (datetime.now().isoformat(), codice))
-    db.commit(); return redirect("/admin_utenti")
+def bot_loop():
+    offset = 0
+    print("BOT LOOP AVVIATO - aspetto messaggi Telegram...")
+    while True:
+        try:
+            if not BOT_TOKEN or BOT_TOKEN.startswith("METTI_"):
+                print("BOT_TOKEN mancante su Render, aspetto 10 sec...")
+                time.sleep(10); continue
+            r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates", params={"offset": offset, "timeout": 30}, timeout=35).json()
+            if not r.get("ok"):
+                print("Errore Telegram getUpdates:", r)
+                time.sleep(5); continue
+            for upd in r.get("result", []):
+                offset = upd["update_id"] + 1; con = db()
+                print("Ricevuto da Telegram:", upd)
+                if "message" in upd:
+                    msg = upd["message"]; chat_id = msg["chat"]["id"]; testo = msg.get("text", "")
+                    if testo.strip().upper() in ["AVVIA", "AVVIA_START", "START", "CIAO", "HI", "INIZIA"]:
+                        manda_telegram(chat_id, "Ciao! Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
+                    elif testo.startswith("/start"):
+                        parti = testo.split(); codice = parti[1] if len(parti) > 1 else ""
+                        fam = con.execute("SELECT * FROM famiglie WHERE codice_link=?", (codice,)).fetchone() if codice else None
+                        if fam:
+                            manda_telegram(chat_id, f"Ciao UTENTE, il tuo codice unico è {fam['otp']}. Scrivilo qui per firmare ed entrare.", {"inline_keyboard": [[{"text": "✅ HO CAPITO - SCRIVO IL CODICE", "callback_data": "AVVIA_START"}]]})
+                        else:
+                            manda_telegram(chat_id, "Ciao! 👋 Sono il tuo Badante Virtuale ❤️\n\nVuoi configurare il Badante?\n\nSe hai già il codice di 6 cifre dal sito, scrivilo qui.", {"inline_keyboard": [[{"text": "✅ SI - Configura", "callback_data": "CONFIG_SI"}, {"text": "❌ NO - Salta", "callback_data": "CONFIG_NO"}], [{"text": "🆘 SOS", "callback_data": "HELP_AVVIA"}]]})
+                    elif testo.isdigit() and len(testo) == 6:
+                        fam = con.execute("SELECT * FROM famiglie WHERE otp=?", (testo,)).fetchone()
+                        if fam:
+                            p = con.execute("SELECT * FROM persone WHERE famiglia_id=? AND telegram_id IS NULL ORDER BY id LIMIT 1", (fam["id"],)).fetchone()
+                            if p: con.execute("UPDATE persone SET verificato=1, telegram_id=? WHERE id=?", (chat_id, p["id"])); con.commit()
+                            tastiera_sos = {"keyboard": [[{"text": "🆘 SOS - MANDA POSIZIONE", "request_location": True}], [{"text": "🆘 HELP"}]], "resize_keyboard": True}
+                            manda_telegram(chat_id, f"Benvenuto UTENTE, sei entrato ✓ Ora puoi usare SOS con posizione.", tastiera_sos)
+                        else: manda_telegram(chat_id, "Codice sbagliato, riprova.")
+                    elif testo == "🆘 HELP":
+                        manda_telegram(chat_id, "Hai premuto HELP. Premi AVVIA per mandare l'aiuto.", {"inline_keyboard": [[{"text": "➡️ AVVIA", "callback_data": "HELP_AVVIA"}]]})
+                    elif "location" in msg:
+                        loc = msg["location"]; lat=loc["latitude"]; lon=loc["longitude"]
+                        link_maps = f"https://www.google.com/maps?q={lat},{lon}"
+                        pers = con.execute("SELECT * FROM persone WHERE telegram_id=?", (chat_id,)).fetchone()
+                        if pers:
+                            altra = con.execute("SELECT * FROM persone WHERE famiglia_id=? AND id!=? AND telegram_id IS NOT NULL", (pers["famiglia_id"], pers["id"])).fetchone()
+                            if altra: manda_telegram(altra["telegram_id"], f"🆘 SOS da {pers['nome']}! POSIZIONE: {link_maps}")
+                            manda_telegram(chat_id, f"SOS + POSIZIONE MANDATO ✓ {link_maps}")
+                        else: manda_telegram(chat_id, "Non ti trovo, rifai l'iscrizione.")
+                    elif "contact" in msg:
+                        numero = msg["contact"]["phone_number"]; persone = con.execute("SELECT * FROM persone").fetchall(); trovato=False
+                        for p in persone:
+                            if p["cell"] and numero.endswith(p["cell"][-9:]):
+                                con.execute("UPDATE persone SET telegram_id=? WHERE id=?", (chat_id, p["id"])); con.commit()
+                                manda_telegram(chat_id, f"Ciao UTENTE, vuoi ricevere i promemoria? Premi SI per accettare, NO per rifiutare.", {"inline_keyboard": [[{"text": "SI", "callback_data": f"ACCETTA_{p['id']}"}, {"text": "NO", "callback_data": f"RIFIUTA_{p['id']}"}]]}); trovato=True; break
+                        if not trovato: manda_telegram(chat_id, "Numero non uguale a quello scritto. Si blocca tutto. Chiedi di controllare.")
+                    else:
+                        if testo.strip() != "":
+                            manda_telegram(chat_id, "Scrivi AVVIA per vedere il menu ❤️")
+                if "callback_query" in upd:
+                    cb = upd["callback_query"]; chat_id = cb["message"]["chat"]["id"]; data = cb["data"]
+                    try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cb["id"]}, timeout=5)
+                    except: pass
+                    if data == "CONFIG_SI":
+                        manda_telegram(chat_id, "Perfetto! Iniziamo la configurazione.\n\nSe hai il codice di 6 cifre dal sito, scrivilo qui e premi INVIA.\nSe non ce l'hai, vai sul sito e iscriviti.")
+                    elif data == "CONFIG_NO":
+                        manda_telegram(chat_id, "Ok, salto la configurazione. Puoi scrivermi AVVIA quando vuoi! ❤️")
+                    elif data == "AVVIA_START":
+                        manda_telegram(chat_id, "Perfetto! Ora scrivi qui il tuo codice di 6 cifre che ti ha dato il sito e premi INVIA.")
+                    elif data.startswith("SI_"):
+                        mid = data.split("_")[1]; con.execute("UPDATE messaggi SET risposta='SI' WHERE id=?", (mid,)); con.commit()
+                        m = con.execute("SELECT * FROM messaggi WHERE id=?", (mid,)).fetchone()
+                        if m:
+                            pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? ORDER BY id LIMIT 1", (m["famiglia_id"],)).fetchone()
+                            if pers and pers["telegram_id"]: manda_telegram(pers["telegram_id"], "Ha CONFERMATO ✓")
+                        manda_telegram(chat_id, "Grazie ✓")
+                    elif data.startswith("NO_"):
+                        mid = data.split("_")[1]; con.execute("UPDATE messaggi SET risposta='NO' WHERE id=?", (mid,)); con.commit()
+                        m = con.execute("SELECT * FROM messaggi WHERE id=?", (mid,)).fetchone()
+                        if m:
+                            pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? ORDER BY id LIMIT 1", (m["famiglia_id"],)).fetchone()
+                            if pers and pers["telegram_id"]: manda_telegram(pers["telegram_id"], "Ha detto NO / non ha risposto")
+                        manda_telegram(chat_id, "Ok, capito.")
+                    elif data == "HELP_AVVIA":
+                        pers = con.execute("SELECT * FROM persone WHERE telegram_id=?", (chat_id,)).fetchone()
+                        if pers:
+                            fam = con.execute("SELECT * FROM famiglie WHERE id=?", (pers["famiglia_id"],)).fetchone()
+                            if fam and fam["stato"] != "BLOCCATO":
+                                ora = time.strftime("%H:%M")
+                                altra = con.execute("SELECT * FROM persone WHERE famiglia_id=? AND id!=? AND telegram_id IS NOT NULL", (pers["famiglia_id"], pers["id"])).fetchone()
+                                if altra: manda_telegram(altra["telegram_id"], f"🆘 AIUTO! {pers['nome']} ha premuto il bottone alle {ora}. Chiamalo subito!")
+                                manda_telegram(chat_id, "AIUTO MANDATO ✓")
+                            else: manda_telegram(chat_id, "Servizio bloccato, non parte niente.")
+                        else:
+                            manda_telegram(chat_id, "🆘 SOS PREMUTO! Per mandare l'aiuto devi prima entrare con il codice di 6 cifre dal sito.")
+                    elif data.startswith("ACCETTA"): manda_telegram(chat_id, "Grazie, hai accettato ✓ Ora riceverai i promemoria.", {"keyboard": [[{"text": "🆘 SOS - MANDA POSIZIONE", "request_location": True}], [{"text": "🆘 HELP"}]], "resize_keyboard": True})
+                    elif data.startswith("RIFIUTA"): manda_telegram(chat_id, "Ok, non parte niente.")
+                con.close()
+        except Exception as e: print("Errore bot:", e); time.sleep(2)
 
-@app.route("/admin/aggiungi", methods=["POST"])
-def admin_aggiungi():
-    if not session.get("admin"): return redirect("/admin_utenti")
-    codice = (request.form.get("codice") or "").strip().upper()
-    if codice:
-        db = get_db()
-        db.execute("INSERT OR REPLACE INTO codici (codice, stato, creato, usato_da, chat_id, usa_id) VALUES (?,?,?,?,?,?)", (codice, "PAGATO", datetime.now().isoformat(), "", "", ""))
-        db.execute("INSERT OR REPLACE INTO pagamenti (codice, stato, creato, confermato, chat_id) VALUES (?,?,?,?,?)", (codice, "PAGATO", datetime.now().isoformat(), datetime.now().isoformat(), ""))
-        db.commit()
-    return redirect("/admin_utenti")
-
-@app.route("/admin/elimina_persona/<int:pid>", methods=["POST"])
-def admin_elimina_persona(pid):
-    if not session.get("admin"): return redirect("/admin_utenti")
-    db = get_db(); db.execute("DELETE FROM persone WHERE id=?", (pid,)); db.commit()
-    return redirect("/admin_utenti")
-
-if __name__ == "__main__":
+_threads_avviati = False
+def avvia_threads():
+    global _threads_avviati
+    if _threads_avviati: return
+    _threads_avviati = True
+    threading.Thread(target=orologio, daemon=True).start()
+    threading.Thread(target=fila, daemon=True).start()
     threading.Thread(target=bot_loop, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    print("LA TUA BADANTE VIRTUALE ACCESA")
+
+avvia_threads()
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
     app.run(host="0.0.0.0", port=port)
