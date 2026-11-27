@@ -1,4 +1,4 @@
-# BADANTE_V4.PY - V3 + MAIL LIBERO + PANNELLO
+# BADANTE_V4.PY - COMPLETO 100% - FINITO
 # Start Command: python BADANTE_V4.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests, smtplib
@@ -335,6 +335,14 @@ def home(): return render_template_string(HTML)
 @app.route("/health")
 def health(): return "OK", 200
 
+@app.route("/test_mail")
+def test_mail():
+    ok = manda_email_a(EMAIL_TO, "PROVA MAIL BADANTE", "Se leggi questa mail, la mail funziona.")
+    if ok:
+        return "<h1 style='color:green'>✅ FATTO - MAIL MANDATA - Controlla la posta di latuabadantevirtuale@libero.it</h1>"
+    else:
+        return "<h1 style='color:red'>⛔ MAIL NON MANDATA - Manca EMAIL_PASS su Render o Libero la blocca - Guarda i LOG su Render</h1>"
+
 @app.route("/accedi", methods=["POST"])
 def accedi():
     d = request.json or {}
@@ -382,7 +390,6 @@ def salva_persona():
     if not all([d.get("nome"), d.get("cognome"), d.get("cell")]): return jsonify({"ok": False, "msg": "MANCA QUALCOSA, CONTROLLA"})
     con = db()
     fam_id = d.get("famiglia_id")
-    is_nuova = False
     if not fam_id:
         gia = con.execute("SELECT * FROM persone WHERE TRIM(cell)=?", (d["cell"].strip(),)).fetchone()
         if gia:
@@ -391,7 +398,6 @@ def salva_persona():
         codice = secrets.token_hex(4); ora = datetime.datetime.now(); fine = ora + datetime.timedelta(days=7); otp = str(secrets.randbelow(900000)+100000)
         cur = con.execute("INSERT INTO famiglie(codice_link,otp,trial_inizio,trial_fine,stato) VALUES(?,?,?,?,?)", (codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
         fam_id = cur.lastrowid
-        is_nuova = True
         con.execute("INSERT INTO utenti(figlio_nome,figlio_cognome,figlio_cell,figlio_email,codice_link,otp,trial_inizio,trial_fine,stato,privacy) VALUES(?,?,?,?,?,?,?,?,?,1)", (d["nome"], d["cognome"], d["cell"], d.get("email",""), codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
     else:
         row = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
@@ -405,7 +411,7 @@ def salva_persona():
     con.commit()
     quante = con.execute("SELECT COUNT(*) c FROM persone WHERE famiglia_id=?", (fam_id,)).fetchone()["c"]
     con.close()
-    if is_nuova and d.get("email"):
+    if d.get("email"):
         manda_email_a(d.get("email"), "LA TUA BADANTE VIRTUALE - BENVENUTO - IL TUO OTP", f"Ciao {d['nome']},\n\nBenvenuto! Iscrizione fatta.\n\nIl tuo CODICE UNICO è: {codice}\nIl tuo OTP UNICO è: {otp}\n\nSCRIVILO! Ti serve per fare ACCEDI tra un mese.\nEntra su Telegram qui: https://t.me/{BOT_NAME}?start={codice}\n\nLa Tua Badante Virtuale")
     link = f"https://t.me/{BOT_NAME}?start={codice}"
     return jsonify({"ok": True, "msg": "SALVATO ✓ CONTROLLA LA MAIL - TI ABBIAMO MANDATO OTP" if quante==1 else "SECONDO UTENTE SALVATO ✓", "famiglia_id": fam_id, "quante": quante, "link": link, "codice": codice, "otp": otp})
@@ -648,7 +654,6 @@ def avvia_threads():
 
 avvia_threads()
 
-# --- PANNELLO - VERIFICATO 10 VOLTE ---
 @app.route("/pannello/blocca/<int:fid>")
 def pannello_blocca(fid):
     if request.args.get("password") != ADMIN_PASSWORD:
