@@ -1,5 +1,5 @@
-# BADANTE_V2.PY - NUOVO CON LOGIN DOPO UN MESE - VECCHIO NON TOCCATO
-# Start Command per provare: python BADANTE_V2.PY
+# BADANTE_V3.PY - NUOVO CON RECUPERA OTP - V2 + RECUPERA
+# Start Command per provare: python BADANTE_V3.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
@@ -48,15 +48,28 @@ HTML = """
 <h1>LA TUA BADANTE VIRTUALE è un servizio di promemoria. NON sostituiamo il medico.</h1>
 <div id="stato">SBLOCCATO</div>
 <div class="finestra" style="border-color:blue;background:#eef6ff"><h2 style="color:blue">SEI GIA' ISCRITTO? TORNI DOPO UN MESE?</h2>
+<p><b>Prima volta?</b> Vai a destra in UTENTE - PRIMA VOLTA.<br><b>Già iscritto?</b> Entra da qui sotto.</p>
 <p>Metti il tuo numero + il tuo OTP di 6 cifre che ti abbiamo dato la prima volta.</p>
 <input id="loginCell" placeholder="Tuo numero Cell">
 <input id="loginOtp" placeholder="Il tuo OTP di 6 cifre">
 <button onclick="accedi()" style="background:blue;color:white">ACCEDI - SONO IO</button>
 <div id="rLogin"></div>
 <div id="bentornato" style="display:none;color:green;font-weight:bold"></div>
-<button onclick="esci()" style="font-size:12px">ESCI - DIMENTICAMI SU QUESTO TELEFONO</button>
+<hr>
+<p><b>HAI DIMENTICATO L'OTP? NON ARRIVA PER MAIL, LO RECUPERI QUI:</b></p>
+<button onclick="apri('boxRecupera')" style="background:orange">HAI DIMENTICATO L'OTP? RECUPERA</button>
+<div id="boxRecupera" style="display:none">
+<input id="recCell" placeholder="Tuo numero Cell">
+<input id="recNome" placeholder="Nome che hai usato per iscriverti">
+<input id="recCognome" placeholder="Cognome che hai usato per iscriverti">
+<input id="recEmail" placeholder="Email che hai usato per iscriverti">
+<button onclick="recuperaOtp()" style="background:orange">MOSTRAMI IL MIO OTP</button>
+<div id="rRecupera"></div>
+</div>
+<br><button onclick="esci()" style="font-size:12px">ESCI - DIMENTICAMI SU QUESTO TELEFONO</button>
 </div>
 <div class="finestra" id="boxIscrizione"><h2>UTENTE - PRIMA VOLTA</h2>
+<p><b>SOLO LA PRIMA VOLTA. Se sei già iscritto vai a sinistra in ACCEDI.</b></p>
 <p>Utente <span id="numPersona">1</span> di 2</p>
 <input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="email" placeholder="Email"><input id="cell" placeholder="Numero Cell"><br>
 <div id="boxPrivacy" style="display:none"><label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br></div>
@@ -110,6 +123,22 @@ async function accedi(){
     document.getElementById('linkbox').innerHTML='Il tuo CODICE: <b>'+r.codice+'</b><br>Il tuo OTP: <b>'+r.otp+'</b>';
     aggiornaChiSono();
     caricaLista();
+  }
+}
+async function recuperaOtp(){
+  if(!recCell.value || !recNome.value || !recCognome.value || !recEmail.value){ alert('MANCA CELL / NOME / COGNOME / EMAIL - METTILI TUTTI E 4'); return; }
+  let datiRec = {};
+  datiRec["cell"] = recCell.value;
+  datiRec["nome"] = recNome.value;
+  datiRec["cognome"] = recCognome.value;
+  datiRec["email"] = recEmail.value;
+  let r=await fetch('/recupera_otp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datiRec)}).then(x=>x.json());
+  document.getElementById('rRecupera').innerText=r.msg;
+  document.getElementById('rRecupera').className=r.ok?'verde':'rosso';
+  if(r.ok){
+    document.getElementById('loginOtp').value=r.otp;
+    document.getElementById('loginCell').value=recCell.value;
+    document.getElementById('rRecupera').innerHTML='✅ IL TUO OTP E: <b style="font-size:24px">'+r.otp+'</b><br>Te l\\'ho già messo sopra in ACCEDI. Ora premi ACCEDI - SONO IO.';
   }
 }
 function bloccaIscrizione(){
@@ -282,6 +311,26 @@ def accedi():
     out = {"ok": True, "msg": "BENTORNATO - TI HO RICONOSCIUTO", "famiglia_id": fam["id"], "codice": fam["codice_link"], "otp": fam["otp"]}
     con.close()
     return jsonify(out)
+
+@app.route("/recupera_otp", methods=["POST"])
+def recupera_otp():
+    d = request.json or {}
+    cell = (d.get("cell") or "").strip()
+    nome = (d.get("nome") or "").strip().lower()
+    cognome = (d.get("cognome") or "").strip().lower()
+    email = (d.get("email") or "").strip().lower()
+    if not cell or not nome or not cognome or not email:
+        return jsonify({"ok": False, "msg": "MANCA CELL / NOME / COGNOME / EMAIL - METTILI TUTTI E 4"})
+    con = db()
+    p = con.execute("SELECT * FROM persone WHERE TRIM(cell)=? AND LOWER(TRIM(nome))=? AND LOWER(TRIM(cognome))=? AND LOWER(TRIM(email))=?", (cell, nome, cognome, email)).fetchone()
+    if not p:
+        con.close()
+        return jsonify({"ok": False, "msg": "DATI SBAGLIATI - NOME / COGNOME / EMAIL / CELL NON COMBACIANO CON QUELLI DELL'ISCRIZIONE"})
+    fam = con.execute("SELECT * FROM famiglie WHERE id=?", (p["famiglia_id"],)).fetchone()
+    con.close()
+    if not fam:
+        return jsonify({"ok": False, "msg": "FAMIGLIA NON TROVATA"})
+    return jsonify({"ok": True, "msg": "OTP TROVATO", "otp": fam["otp"], "codice": fam["codice_link"], "famiglia_id": fam["id"]})
 
 @app.route("/salva_persona", methods=["POST"])
 def salva_persona():
