@@ -1,5 +1,5 @@
-  # BADANTE.PY - VERSIONE RENDER CORRETTA - SISTEMATA V2
-# Start Command su Render: python BADANTE.PY
+# BADANTE_V2.PY - NUOVO CON LOGIN DOPO UN MESE - VECCHIO NON TOCCATO
+# Start Command per provare: python BADANTE_V2.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests
 from flask import Flask, request, jsonify, render_template_string
@@ -47,7 +47,16 @@ HTML = """
 <style>body{font-family:Arial;text-align:center}h1{font-size:22px}.finestra{border:2px solid #333;display:inline-block;width:340px;margin:10px;padding:15px;vertical-align:top}input,select{width:92%;padding:10px;margin:5px;font-size:16px}button{padding:12px 20px;font-size:16px;margin:5px;cursor:pointer}.verde{color:green}.rosso{color:red}.bloccato{opacity:0.5;pointer-events:none}.boxmsg{border:2px solid #333;display:inline-block;width:340px;margin:5px;padding:10px;vertical-align:top}</style></head><body>
 <h1>LA TUA BADANTE VIRTUALE è un servizio di promemoria. NON sostituiamo il medico.</h1>
 <div id="stato">SBLOCCATO</div>
-<div class="finestra" id="boxIscrizione"><h2>UTENTE</h2>
+<div class="finestra" style="border-color:blue;background:#eef6ff"><h2 style="color:blue">SEI GIA' ISCRITTO? TORNI DOPO UN MESE?</h2>
+<p>Metti il tuo numero + il tuo OTP di 6 cifre che ti abbiamo dato la prima volta.</p>
+<input id="loginCell" placeholder="Tuo numero Cell">
+<input id="loginOtp" placeholder="Il tuo OTP di 6 cifre">
+<button onclick="accedi()" style="background:blue;color:white">ACCEDI - SONO IO</button>
+<div id="rLogin"></div>
+<div id="bentornato" style="display:none;color:green;font-weight:bold"></div>
+<button onclick="esci()" style="font-size:12px">ESCI - DIMENTICAMI SU QUESTO TELEFONO</button>
+</div>
+<div class="finestra" id="boxIscrizione"><h2>UTENTE - PRIMA VOLTA</h2>
 <p>Utente <span id="numPersona">1</span> di 2</p>
 <input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="email" placeholder="Email"><input id="cell" placeholder="Numero Cell"><br>
 <div id="boxPrivacy" style="display:none"><label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br></div>
@@ -58,6 +67,7 @@ HTML = """
 <br><button onclick="apri('fcont')">CONTATTI</button>
 <div id="fcont" style="display:none"><textarea id="msgCont" style="width:80%;height:100px" placeholder="Scrivi qui - Se vuoi cancellare i tuoi dati scrivi CANCELLAMI"></textarea><br><button onclick="inviaContatto()">INVIO</button><div id="rc"></div></div>
 <div style="margin-top:15px"><h2>Scrivi Messaggio</h2>
+<div id="chiSono" style="font-weight:bold;color:green"></div>
 <div class="boxmsg"><p>1 - SCRIVI MESSAGGIO</p><input id="testo" placeholder="Es: Hai preso la medicina delle 9?"></div>
 <div class="boxmsg"><p>2 - SCEGLI GIORNO E ORA - CALENDARIO</p><input id="dataora" type="datetime-local"><br><small>Puoi mandare tra 1 minuto o tra 3 mesi</small></div>
 <div class="boxmsg"><p>3 - A CHI VA?</p><select id="dest"><option>UTENTE 2</option><option>UTENTE 1</option></select></div>
@@ -70,6 +80,38 @@ HTML = """
 let FAMIGLIA_ID=null;
 let FASE=1;
 function apri(id){let e=document.getElementById(id); e.style.display=e.style.display=='none'?'block':'none';}
+function aggiornaChiSono(){
+  if(FAMIGLIA_ID){ document.getElementById('chiSono').innerText='Stai scrivendo come: Famiglia '+FAMIGLIA_ID+' - Se non sei tu, premi ESCI sopra e fai ACCEDI con il tuo numero.'; }
+}
+function salvaInTelefono(famiglia_id, otp){
+  try{ localStorage.setItem('mia_famiglia', famiglia_id); if(otp) localStorage.setItem('mio_otp', otp); }catch(e){}
+}
+function esci(){
+  try{ localStorage.removeItem('mia_famiglia'); localStorage.removeItem('mio_otp'); }catch(e){}
+  FAMIGLIA_ID=null; FASE=1;
+  document.getElementById('bentornato').style.display='none';
+  document.getElementById('chiSono').innerText='';
+  alert('Uscito. Ora puoi fare ACCEDI con un altro numero.');
+  location.reload();
+}
+async function accedi(){
+  if(!loginCell.value || !loginOtp.value){ alert('MANCA NUMERO / OTP'); return; }
+  let datiLogin = {};
+  datiLogin["cell"] = loginCell.value;
+  datiLogin["otp"] = loginOtp.value;
+  let r=await fetch('/accedi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datiLogin)}).then(x=>x.json());
+  document.getElementById('rLogin').innerText=r.msg;
+  document.getElementById('rLogin').className=r.ok?'verde':'rosso';
+  if(r.ok){
+    FAMIGLIA_ID=r.famiglia_id;
+    salvaInTelefono(FAMIGLIA_ID, loginOtp.value);
+    document.getElementById('bentornato').style.display='block';
+    document.getElementById('bentornato').innerText='✅ BENTORNATO! Sei Famiglia '+FAMIGLIA_ID+' - Ora puoi mandare messaggi.';
+    document.getElementById('linkbox').innerHTML='Il tuo CODICE: <b>'+r.codice+'</b><br>Il tuo OTP: <b>'+r.otp+'</b>';
+    aggiornaChiSono();
+    caricaLista();
+  }
+}
 function bloccaIscrizione(){
   document.getElementById('boxIscrizione').classList.add('bloccato');
   document.getElementById('spuntaVerde').style.display='block';
@@ -91,30 +133,43 @@ function bloccaCambio(){
   document.getElementById('nuovoNum').disabled=true;
 }
 async function salvaPersona(){
- // FASE 1 = UTENTE 1 - senza privacy ancora
  if(FASE==1){
    if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL");return;}
-   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
+   let datiP1 = {};
+   datiP1["famiglia_id"] = FAMIGLIA_ID;
+   datiP1["ruolo"] = 'UTENTE';
+   datiP1["nome"] = nome.value;
+   datiP1["cognome"] = cognome.value;
+   datiP1["cell"] = cell.value;
+   datiP1["email"] = email.value;
+   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datiP1)}).then(x=>x.json());
    document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
    if(r.ok){
      FAMIGLIA_ID=r.famiglia_id;
-     document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b>';
-     // PASSA A UTENTE 2
+     salvaInTelefono(FAMIGLIA_ID, r.otp);
+     document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b><br><b>SCRIVILO! Ti servira tra un mese per fare ACCEDI.</b>';
      FASE=2;
      document.getElementById('numPersona').innerText='2';
      document.getElementById('r1').innerText='✅ PRIMO UTENTE SALVATO. Ora inserisci il SECONDO UTENTE.';
      nome.value=''; cognome.value=''; cell.value=''; email.value='';
      document.getElementById('boxPrivacy').style.display='block';
      document.getElementById('btnSalva').innerText='SALVA - FINE ISCRIZIONE';
+     aggiornaChiSono();
      caricaLista();
    }
    return;
  }
- // FASE 2 = UTENTE 2 - QUI SERVE PRIVACY + 2 UTENTI OBBLIGATORI
  if(FASE==2){
    if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL - INSERISCI UTENTE 2");return;}
    if(!document.getElementById('priv1').checked){alert("DEVI METTERE LA SPUNTA PRIVACY PER FINIRE");return;}
-   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,ruolo:'UTENTE',nome:nome.value,cognome:cognome.value,cell:cell.value,email:email.value})}).then(x=>x.json());
+   let datiP2 = {};
+   datiP2["famiglia_id"] = FAMIGLIA_ID;
+   datiP2["ruolo"] = 'UTENTE';
+   datiP2["nome"] = nome.value;
+   datiP2["cognome"] = cognome.value;
+   datiP2["cell"] = cell.value;
+   datiP2["email"] = email.value;
+   let r=await fetch('/salva_persona',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datiP2)}).then(x=>x.json());
    document.getElementById('r1').innerText=r.msg; document.getElementById('r1').className=r.ok?'verde':'rosso';
    if(r.ok){
      if(r.quante<2){alert("INSERISCI UTENTE 2");return;}
@@ -126,38 +181,78 @@ async function salvaPersona(){
  }
 }
 async function salvaMessaggio(){
- if(!FAMIGLIA_ID){alert("Prima devi iscriverti con 2 UTENTI");return;}
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti con 2 UTENTI, oppure fai ACCEDI sopra con numero + OTP");return;}
  if(!testo.value){alert("SCRIVI IL MESSAGGIO");return;}
  if(!dataora.value){alert("SCEGLI GIORNO E ORA DAL CALENDARIO");return;}
- // dataora = 2026-11-25T15:30 -> dividiamo in data e ora
  let parti = dataora.value.split('T');
  let dataScelta = parti[0];
  let oraScelta = parti[1].substring(0,5);
  if(!confirm("HAI SCRITTO: "+testo.value+" - IL GIORNO "+dataScelta+" ALLE "+oraScelta+" - È CORRETTO? SI / NO")) return;
- let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,utente_id:FAMIGLIA_ID,testo:testo.value,data:dataScelta,[STRIPPED]
+ let datiMsg = {};
+ datiMsg["famiglia_id"] = FAMIGLIA_ID;
+ datiMsg["utente_id"] = FAMIGLIA_ID;
+ datiMsg["testo"] = testo.value;
+ datiMsg["data"] = dataScelta;
+ datiMsg["ora"] = oraScelta;
+ datiMsg["destinatario"] = dest.value;
+ let r=await fetch('/salva_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datiMsg)}).then(x=>x.json());
  document.getElementById('rm').innerText=r.msg; if(r.ok) caricaLista();
 }
 async function caricaLista(){ if(!FAMIGLIA_ID) return; let l=await fetch('/lista_messaggi/'+FAMIGLIA_ID).then(x=>x.json()); let h=""; l.forEach(m=>{h+="<div>"+m.destinatario+" - "+m.testo+" - "+m.data_invio+" "+m.ora_invio+" - "+m.stato+" <button onclick=\\"cancellaMsg("+m.id+")\\">CANCELLA</button> <button onclick=\\"modificaMsg("+m.id+")\\">CAMBIA</button></div>";}); document.getElementById('lista').innerHTML=h; }
-async function cancellaMsg(id){ await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); caricaLista(); }
-async function modificaMsg(id){ let t=prompt("Nuovo testo:"); if(!t) return; await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,testo:t,data:dataora.value.split('T')[0],[STRIPPED] caricaLista(); }
-async function inviaContatto(){let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messaggio:msgCont.value})}).then(x=>x.json()); document.getElementById('rc').innerText=r.msg;}
+async function cancellaMsg(id){ let d1={}; d1["id"]=id; await fetch('/cancella_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d1)}); caricaLista(); }
+async function modificaMsg(id){
+  let t=prompt("Nuovo testo:"); if(!t) return;
+  let datiMod = {};
+  datiMod["id"] = id;
+  datiMod["testo"] = t;
+  datiMod["data"] = dataora.value.split('T')[0];
+  datiMod["ora"] = dataora.value.split('T')[1].substring(0,5);
+  datiMod["destinatario"] = dest.value;
+  await fetch('/modifica_messaggio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datiMod)});
+  caricaLista();
+}
+async function inviaContatto(){
+  let dC={}; dC["messaggio"]=msgCont.value;
+  let r=await fetch('/contatti',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dC)}).then(x=>x.json());
+  document.getElementById('rc').innerText=r.msg;
+}
 async function cambiaNumero(){
- if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti o fare ACCEDI");return;}
  if(!nomeCambio.value || !cognomeCambio.value || !emailCambio.value || !vecchioNum.value || !nuovoNum.value){alert("MANCA NOME / COGNOME / EMAIL / CELLULARE VECCHIO / CELLULARE NUOVO");return;}
- let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({utente_id:FAMIGLIA_ID,nome:nomeCambio.value,cognome:cognomeCambio.value,email:emailCambio.value,vecchio_numero:vecchioNum.value,nuovo_numero:nuovoNum.value})}).then(x=>x.json());
+ let dNum={};
+ dNum["utente_id"]=FAMIGLIA_ID;
+ dNum["nome"]=nomeCambio.value;
+ dNum["cognome"]=cognomeCambio.value;
+ dNum["email"]=emailCambio.value;
+ dNum["vecchio_numero"]=vecchioNum.value;
+ dNum["nuovo_numero"]=nuovoNum.value;
+ let r=await fetch('/cambia_numero',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dNum)}).then(x=>x.json());
  document.getElementById('rCambio').innerText=r.msg; document.getElementById('rCambio').className=r.ok?'verde':'rosso';
  if(r.ok){ bloccaCambio(); }
 }
 async function paga(piano){alert("Paghi "+piano+" con Carta o PayPal. Dopo il pagamento Stripe manda WEBHOOK e ti sblocca in 1-2 minuti.");}
 async function mandaSOS(){
- if(!FAMIGLIA_ID){alert("Prima devi iscriverti");return;}
+ if(!FAMIGLIA_ID){alert("Prima devi iscriverti o fare ACCEDI");return;}
  if(!navigator.geolocation){alert("Questo telefono non manda la posizione");return;}
  document.getElementById('rSOS').innerText="Sto prendendo la posizione...";
  navigator.geolocation.getCurrentPosition(async function(pos){
    let lat=pos.coords.latitude, lon=pos.coords.longitude;
-   let r=await fetch('/sos_posizione',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({famiglia_id:FAMIGLIA_ID,lat:lat,lon:lon})}).then(x=>x.json());
+   let dSos={}; dSos["famiglia_id"]=FAMIGLIA_ID; dSos["lat"]=lat; dSos["lon"]=lon;
+   let r=await fetch('/sos_posizione',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dSos)}).then(x=>x.json());
    document.getElementById('rSOS').innerText=r.msg;
  }, function(){ document.getElementById('rSOS').innerText="Devi premere CONSENTI alla posizione"; });
+}
+window.onload=function(){
+  try{
+    let salvato = localStorage.getItem('mia_famiglia');
+    if(salvato){
+      FAMIGLIA_ID = parseInt(salvato);
+      document.getElementById('bentornato').style.display='block';
+      document.getElementById('bentornato').innerText='✅ BENTORNATO! Ti ho riconosciuto, sei Famiglia '+FAMIGLIA_ID;
+      aggiornaChiSono();
+      caricaLista();
+    }
+  }catch(e){}
 }
 </script></body></html>
 """
@@ -168,6 +263,26 @@ def home(): return render_template_string(HTML)
 @app.route("/health")
 def health(): return "OK", 200
 
+@app.route("/accedi", methods=["POST"])
+def accedi():
+    d = request.json or {}
+    cell = (d.get("cell") or "").strip()
+    otp = (d.get("otp") or "").strip()
+    if not cell or not otp:
+        return jsonify({"ok": False, "msg": "MANCA NUMERO / OTP"})
+    con = db()
+    p = con.execute("SELECT * FROM persone WHERE TRIM(cell)=?", (cell,)).fetchone()
+    if not p:
+        con.close()
+        return jsonify({"ok": False, "msg": "NUMERO NON TROVATO - DEVI ISCRIVERTI PRIMA"})
+    fam = con.execute("SELECT * FROM famiglie WHERE id=? AND otp=?", (p["famiglia_id"], otp)).fetchone()
+    if not fam:
+        con.close()
+        return jsonify({"ok": False, "msg": "OTP SBAGLIATO - CONTROLLA IL CODICE DI 6 CIFRE"})
+    out = {"ok": True, "msg": "BENTORNATO - TI HO RICONOSCIUTO", "famiglia_id": fam["id"], "codice": fam["codice_link"], "otp": fam["otp"]}
+    con.close()
+    return jsonify(out)
+
 @app.route("/salva_persona", methods=["POST"])
 def salva_persona():
     d = request.json
@@ -175,6 +290,10 @@ def salva_persona():
     con = db()
     fam_id = d.get("famiglia_id")
     if not fam_id:
+        gia = con.execute("SELECT * FROM persone WHERE TRIM(cell)=?", (d["cell"].strip(),)).fetchone()
+        if gia:
+            con.close()
+            return jsonify({"ok": False, "msg": "QUESTO NUMERO E' GIA' ISCRITTO! NON ISCRIVERTI DI NUOVO - FAI ACCEDI SOPRA CON NUMERO + OTP"})
         codice = secrets.token_hex(4); ora = datetime.datetime.now(); fine = ora + datetime.timedelta(days=7); otp = str(secrets.randbelow(900000)+100000)
         cur = con.execute("INSERT INTO famiglie(codice_link,otp,trial_inizio,trial_fine,stato) VALUES(?,?,?,?,?)", (codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
         fam_id = cur.lastrowid
@@ -217,7 +336,6 @@ def salva_messaggio():
     u = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
     if not u: return jsonify({"ok": False, "msg": "UTENTE NON TROVATO"})
     if u["stato"] == "BLOCCATO": return jsonify({"ok": False, "msg": "SEI BLOCCATO, PREMI SBLOCCA - PAGA ORA"})
-    # MAX 10 AL GIORNO PER UTENTE (destinatario)
     cnt = con.execute("SELECT COUNT(*) c FROM messaggi WHERE famiglia_id=? AND data_invio=? AND destinatario=?", (fam_id, d["data"], d["destinatario"])).fetchone()["c"]
     if cnt >= 10: return jsonify({"ok": False, "msg": "HAI GIÀ 10 MESSAGGI PER OGGI PER QUESTO UTENTE"})
     try: ora_scelta = datetime.datetime.strptime(f"{d['data']} {d['ora']}", "%Y-%m-%d %H:%M")
@@ -256,7 +374,6 @@ def contatti():
     d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close(); return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
 @app.route("/cancella_tutto", methods=["POST"])
 def cancella_tutto():
-    # Tenuto solo per noi, non c'è più bottone sul sito. Si usa via CONTATTI se uno scrive CANCELLAMI
     uid = request.json.get("famiglia_id") or request.json.get("utente_id"); con = db(); con.execute("DELETE FROM messaggi WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM persone WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM famiglie WHERE id=?", (uid,)); con.execute("DELETE FROM utenti WHERE id=?", (uid,)); con.commit(); con.close(); return jsonify({"ok": True, "msg": "DATI CANCELLATI ✓"})
 @app.route("/stripe_webhook", methods=["POST"])
 def stripe_webhook():
