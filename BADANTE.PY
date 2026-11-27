@@ -1,4 +1,4 @@
-# BADANTE_V4.PY - V3 + MAIL LIBERO
+# BADANTE_V4.PY - V3 + MAIL LIBERO + PANNELLO
 # Start Command: python BADANTE_V4.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests, smtplib
@@ -616,6 +616,26 @@ def avvia_threads():
     threading.Thread(target=bot_loop, daemon=True).start()
 
 avvia_threads()
+
+# --- PANNELLO ---
+@app.route("/pannello")
+def pannello():
+    if request.args.get("password") != ADMIN_PASSWORD:
+        return "PASSWORD SBAGLIATA", 403
+    con = db()
+    righe = con.execute("""
+        SELECT p.nome, p.cognome, p.cell, p.email, f.otp, f.codice_link, f.stato, f.trial_fine
+        FROM persone p
+        LEFT JOIN famiglie f ON p.famiglia_id = f.id
+        ORDER BY p.id DESC
+    """).fetchall()
+    con.close()
+    html = "<h1>PANNELLO - ISCRITTI</h1><table border='1' cellpadding='8'><tr><th>NOME</th><th>COGNOME</th><th>CELL</th><th>EMAIL</th><th>OTP</th><th>CODICE</th><th>STATO</th><th>TRIAL FINE</th></tr>"
+    for r in righe:
+        html += f"<tr><td>{r['nome']}</td><td>{r['cognome']}</td><td>{r['cell']}</td><td>{r['email']}</td><td>{r['otp']}</td><td>{r['codice_link']}</td><td>{r['stato']}</td><td>{r['trial_fine']}</td></tr>"
+    html += "</table>"
+    return html
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"LA TUA BADANTE VIRTUALE ACCESO - Porta {port}")
