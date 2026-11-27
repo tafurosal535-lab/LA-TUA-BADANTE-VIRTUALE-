@@ -4,7 +4,7 @@
 import os, sqlite3, secrets, threading, time, datetime, json, requests, smtplib
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify, render_template_string
-
+ 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "METTI_QUI_IL_TOKEN_DEL_BOT")
 BOT_NAME = "BadanteVirtualeBot"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "METTI_PASSWORD_SEGRETA")
