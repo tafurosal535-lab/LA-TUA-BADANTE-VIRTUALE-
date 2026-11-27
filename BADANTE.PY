@@ -1,15 +1,38 @@
-# BADANTE_V3.PY - NUOVO CON RECUPERA OTP - V2 + RECUPERA
-# Start Command per provare: python BADANTE_V3.PY
+# BADANTE_V4.PY - V3 + MAIL LIBERO
+# Start Command: python BADANTE_V4.PY
 
-import os, sqlite3, secrets, threading, time, datetime, json, requests
+import os, sqlite3, secrets, threading, time, datetime, json, requests, smtplib
+from email.mime.text import MIMEText
 from flask import Flask, request, jsonify, render_template_string
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "METTI_QUI_IL_TOKEN_DEL_BOT")
 BOT_NAME = "BadanteVirtualeBot"
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "METTI_PASSWORD_SEGRETA")
-MIA_EMAIL = "nostra-mail-fissa@badante.it"
+MIA_EMAIL = "latuabadantevirtuale@libero.it"
+EMAIL_USER = os.environ.get("EMAIL_USER", "latuabadantevirtuale@libero.it")
+EMAIL_PASS = os.environ.get("EMAIL_PASS", "")
+EMAIL_TO = os.environ.get("EMAIL_TO", "latuabadantevirtuale@libero.it")
 
 app = Flask(__name__)
+
+def manda_email_a(destinatario, oggetto, testo):
+    if not EMAIL_USER or not EMAIL_PASS or not destinatario:
+        print("MAIL NON MANDATA - manca EMAIL_USER / EMAIL_PASS")
+        return False
+    try:
+        msg = MIMEText(testo)
+        msg["Subject"] = oggetto
+        msg["From"] = EMAIL_USER
+        msg["To"] = destinatario
+        server = smtplib.SMTP_SSL("smtp.libero.it", 465)
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
+        server.quit()
+        print("MAIL MANDATA a:", destinatario)
+        return True
+    except Exception as e:
+        print("Errore manda email:", e)
+        return False
 
 def db():
     c = sqlite3.connect("database.db", check_same_thread=False)
@@ -49,21 +72,21 @@ HTML = """
 <div id="stato">SBLOCCATO</div>
 <div class="finestra" style="border-color:blue;background:#eef6ff"><h2 style="color:blue">SEI GIA' ISCRITTO? TORNI DOPO UN MESE?</h2>
 <p><b>Prima volta?</b> Vai a destra in UTENTE - PRIMA VOLTA.<br><b>Già iscritto?</b> Entra da qui sotto.</p>
-<p>Metti il tuo numero + il tuo OTP di 6 cifre che ti abbiamo dato la prima volta.</p>
+<p>Metti il tuo numero + il tuo OTP di 6 cifre che ti abbiamo mandato per mail.</p>
 <input id="loginCell" placeholder="Tuo numero Cell">
 <input id="loginOtp" placeholder="Il tuo OTP di 6 cifre">
 <button onclick="accedi()" style="background:blue;color:white">ACCEDI - SONO IO</button>
 <div id="rLogin"></div>
 <div id="bentornato" style="display:none;color:green;font-weight:bold"></div>
 <hr>
-<p><b>HAI DIMENTICATO L'OTP? NON ARRIVA PER MAIL, LO RECUPERI QUI:</b></p>
+<p><b>HAI DIMENTICATO L'OTP? TE LO RIMANDIAMO PER MAIL:</b></p>
 <button onclick="apri('boxRecupera')" style="background:orange">HAI DIMENTICATO L'OTP? RECUPERA</button>
 <div id="boxRecupera" style="display:none">
 <input id="recCell" placeholder="Tuo numero Cell">
 <input id="recNome" placeholder="Nome che hai usato per iscriverti">
 <input id="recCognome" placeholder="Cognome che hai usato per iscriverti">
 <input id="recEmail" placeholder="Email che hai usato per iscriverti">
-<button onclick="recuperaOtp()" style="background:orange">MOSTRAMI IL MIO OTP</button>
+<button onclick="recuperaOtp()" style="background:orange">MANDAMI OTP PER MAIL</button>
 <div id="rRecupera"></div>
 </div>
 <br><button onclick="esci()" style="font-size:12px">ESCI - DIMENTICAMI SU QUESTO TELEFONO</button>
@@ -75,7 +98,7 @@ HTML = """
 <div id="boxPrivacy" style="display:none"><label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br></div>
 <button id="btnSalva" onclick="salvaPersona()">SALVA UTENTE</button>
 <div id="r1"></div><div id="linkbox"></div>
-<div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ FATTO - ISCRIZIONE FATTA</div>
+<div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ FATTO - ISCRIZIONE FATTA - CONTROLLA LA MAIL</div>
 </div>
 <br><button onclick="apri('fcont')">CONTATTI</button>
 <div id="fcont" style="display:none"><textarea id="msgCont" style="width:80%;height:100px" placeholder="Scrivi qui - Se vuoi cancellare i tuoi dati scrivi CANCELLAMI"></textarea><br><button onclick="inviaContatto()">INVIO</button><div id="rc"></div></div>
@@ -136,9 +159,7 @@ async function recuperaOtp(){
   document.getElementById('rRecupera').innerText=r.msg;
   document.getElementById('rRecupera').className=r.ok?'verde':'rosso';
   if(r.ok){
-    document.getElementById('loginOtp').value=r.otp;
-    document.getElementById('loginCell').value=recCell.value;
-    document.getElementById('rRecupera').innerHTML='✅ IL TUO OTP E: <b style="font-size:24px">'+r.otp+'</b><br>Te l\\'ho già messo sopra in ACCEDI. Ora premi ACCEDI - SONO IO.';
+    document.getElementById('rRecupera').innerHTML='✅ TI HO MANDATO OTP PER MAIL A '+recEmail.value+'<br>Controlla la mail, anche nello SPAM. Poi metti OTP sopra e premi ACCEDI.';
   }
 }
 function bloccaIscrizione(){
@@ -176,10 +197,10 @@ async function salvaPersona(){
    if(r.ok){
      FAMIGLIA_ID=r.famiglia_id;
      salvaInTelefono(FAMIGLIA_ID, r.otp);
-     document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b><br><b>SCRIVILO! Ti servira tra un mese per fare ACCEDI.</b>';
+     document.getElementById('linkbox').innerHTML='<br><a href="'+r.link+'" target="_blank"><b>CLICCA QUI PER ENTRARE SU TELEGRAM</b></a><br>Il tuo CODICE UNICO: <b>'+r.codice+'</b><br>Il tuo OTP UNICO: <b>'+r.otp+'</b><br><b>CONTROLLA ANCHE LA MAIL, TE LO ABBIAMO MANDATO LI.</b>';
      FASE=2;
      document.getElementById('numPersona').innerText='2';
-     document.getElementById('r1').innerText='✅ PRIMO UTENTE SALVATO. Ora inserisci il SECONDO UTENTE.';
+     document.getElementById('r1').innerText='✅ PRIMO UTENTE SALVATO. Ti abbiamo mandato OTP per mail. Ora inserisci il SECONDO UTENTE.';
      nome.value=''; cognome.value=''; cell.value=''; email.value='';
      document.getElementById('boxPrivacy').style.display='block';
      document.getElementById('btnSalva').innerText='SALVA - FINE ISCRIZIONE';
@@ -330,7 +351,8 @@ def recupera_otp():
     con.close()
     if not fam:
         return jsonify({"ok": False, "msg": "FAMIGLIA NON TROVATA"})
-    return jsonify({"ok": True, "msg": "OTP TROVATO", "otp": fam["otp"], "codice": fam["codice_link"], "famiglia_id": fam["id"]})
+    manda_email_a(email, "LA TUA BADANTE VIRTUALE - IL TUO OTP", f"Ciao {p['nome']},\n\nIl tuo OTP è: {fam['otp']}\nIl tuo CODICE è: {fam['codice_link']}\n\nMettilo in ACCEDI sul sito.\n\nLa Tua Badante Virtuale")
+    return jsonify({"ok": True, "msg": "OTP MANDATO PER MAIL - CONTROLLA LA MAIL, ANCHE SPAM", "otp": fam["otp"], "codice": fam["codice_link"], "famiglia_id": fam["id"]})
 
 @app.route("/salva_persona", methods=["POST"])
 def salva_persona():
@@ -338,6 +360,7 @@ def salva_persona():
     if not all([d.get("nome"), d.get("cognome"), d.get("cell")]): return jsonify({"ok": False, "msg": "MANCA QUALCOSA, CONTROLLA"})
     con = db()
     fam_id = d.get("famiglia_id")
+    is_nuova = False
     if not fam_id:
         gia = con.execute("SELECT * FROM persone WHERE TRIM(cell)=?", (d["cell"].strip(),)).fetchone()
         if gia:
@@ -346,6 +369,7 @@ def salva_persona():
         codice = secrets.token_hex(4); ora = datetime.datetime.now(); fine = ora + datetime.timedelta(days=7); otp = str(secrets.randbelow(900000)+100000)
         cur = con.execute("INSERT INTO famiglie(codice_link,otp,trial_inizio,trial_fine,stato) VALUES(?,?,?,?,?)", (codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
         fam_id = cur.lastrowid
+        is_nuova = True
         con.execute("INSERT INTO utenti(figlio_nome,figlio_cognome,figlio_cell,figlio_email,codice_link,otp,trial_inizio,trial_fine,stato,privacy) VALUES(?,?,?,?,?,?,?,?,?,1)", (d["nome"], d["cognome"], d["cell"], d.get("email",""), codice, otp, ora.isoformat(), fine.isoformat(), "PROVA"))
     else:
         row = con.execute("SELECT * FROM famiglie WHERE id=?", (fam_id,)).fetchone()
@@ -359,8 +383,10 @@ def salva_persona():
     con.commit()
     quante = con.execute("SELECT COUNT(*) c FROM persone WHERE famiglia_id=?", (fam_id,)).fetchone()["c"]
     con.close()
+    if is_nuova and d.get("email"):
+        manda_email_a(d.get("email"), "LA TUA BADANTE VIRTUALE - BENVENUTO - IL TUO OTP", f"Ciao {d['nome']},\n\nBenvenuto! Iscrizione fatta.\n\nIl tuo CODICE UNICO è: {codice}\nIl tuo OTP UNICO è: {otp}\n\nSCRIVILO! Ti serve per fare ACCEDI tra un mese.\nEntra su Telegram qui: https://t.me/{BOT_NAME}?start={codice}\n\nLa Tua Badante Virtuale")
     link = f"https://t.me/{BOT_NAME}?start={codice}"
-    return jsonify({"ok": True, "msg": "SALVATO ✓" if quante==1 else "SECONDO UTENTE SALVATO ✓", "famiglia_id": fam_id, "quante": quante, "link": link, "codice": codice, "otp": otp})
+    return jsonify({"ok": True, "msg": "SALVATO ✓ CONTROLLA LA MAIL - TI ABBIAMO MANDATO OTP" if quante==1 else "SECONDO UTENTE SALVATO ✓", "famiglia_id": fam_id, "quante": quante, "link": link, "codice": codice, "otp": otp})
 
 @app.route("/salva_figlio", methods=["POST"])
 def salva_figlio(): return salva_persona()
@@ -420,7 +446,9 @@ def cambia_numero():
     con.commit(); con.close(); return jsonify({"ok": True, "msg": "NUMERO CAMBIATO ✓ DEVE FARE DI NUOVO CONDIVIDI NUMERO"})
 @app.route("/contatti", methods=["POST"])
 def contatti():
-    d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close(); return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
+    d = request.json; con = db(); con.execute("INSERT INTO contatti(email,messaggio,creato_il) VALUES(?,?,?)", (MIA_EMAIL, d["messaggio"], datetime.datetime.now().isoformat())); con.commit(); con.close()
+    manda_email_a(EMAIL_TO, "NUOVO CONTATTO - LA TUA BADANTE VIRTUALE", f"Nuovo messaggio da CONTATTI:\n\n{d['messaggio']}\n\nData: {datetime.datetime.now().isoformat()}")
+    return jsonify({"ok": True, "msg": "MESSAGGIO INVIATO ✓ Grazie, ti rispondiamo presto."})
 @app.route("/cancella_tutto", methods=["POST"])
 def cancella_tutto():
     uid = request.json.get("famiglia_id") or request.json.get("utente_id"); con = db(); con.execute("DELETE FROM messaggi WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM persone WHERE famiglia_id=?", (uid,)); con.execute("DELETE FROM famiglie WHERE id=?", (uid,)); con.execute("DELETE FROM utenti WHERE id=?", (uid,)); con.commit(); con.close(); return jsonify({"ok": True, "msg": "DATI CANCELLATI ✓"})
