@@ -1,5 +1,5 @@
 # BADANTE_V4.PY - V3 + MAIL LIBERO + PANNELLO
-# Start Command: python BADANTE_V4.PY
+# Start Command: python BADANTE.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests, smtplib
 from email.mime.text import MIMEText
@@ -35,7 +35,11 @@ def manda_email_a(destinatario, oggetto, testo):
         return False
 
 def db():
-    c = sqlite3.connect("database.db", check_same_thread=False)
+    path = os.environ.get("DATABASE_PATH", "database.db")
+    cartella = os.path.dirname(path)
+    if cartella:
+        os.makedirs(cartella, exist_ok=True)
+    c = sqlite3.connect(path, check_same_thread=False)
     c.row_factory = sqlite3.Row
     return c
 
@@ -97,6 +101,7 @@ HTML = """
 <input id="nome" placeholder="Nome"><input id="cognome" placeholder="Cognome"><input id="email" placeholder="Email"><input id="cell" placeholder="Numero Cell"><br>
 <div id="boxPrivacy" style="display:none"><label><input type="checkbox" id="priv1"> Ho letto l'informativa privacy. Autorizzo a mandare messaggi per ricordarmi medicine e appuntamenti. Posso togliere l'autorizzazione quando voglio.</label><br></div>
 <button id="btnSalva" onclick="salvaPersona()">SALVA UTENTE</button>
+<button onclick="nuovaIscrizione()" style="background:#ffcc00">NUOVA ISCRIZIONE - ALTRA FAMIGLIA</button>
 <div id="r1"></div><div id="linkbox"></div>
 <div id="spuntaVerde" style="display:none;font-size:30px;color:green">✅ FATTO - ISCRIZIONE FATTA - CONTROLLA LA MAIL</div>
 </div>
@@ -129,6 +134,23 @@ function esci(){
   document.getElementById('chiSono').innerText='';
   alert('Uscito. Ora puoi fare ACCEDI con un altro numero.');
   location.reload();
+}
+function nuovaIscrizione(){
+  try{ localStorage.removeItem('mia_famiglia'); localStorage.removeItem('mio_otp'); }catch(e){}
+  FAMIGLIA_ID=null; FASE=1;
+  document.getElementById('numPersona').innerText='1';
+  document.getElementById('btnSalva').innerText='SALVA UTENTE';
+  document.getElementById('btnSalva').disabled=false;
+  document.getElementById('boxIscrizione').classList.remove('bloccato');
+  document.getElementById('spuntaVerde').style.display='none';
+  document.getElementById('boxPrivacy').style.display='none';
+  document.getElementById('nome').disabled=false;
+  document.getElementById('cognome').disabled=false;
+  document.getElementById('cell').disabled=false;
+  document.getElementById('email').disabled=false;
+  nome.value=''; cognome.value=''; cell.value=''; email.value='';
+  document.getElementById('r1').innerText='Ora puoi iscrivere una NUOVA famiglia da zero.';
+  document.getElementById('linkbox').innerHTML='';
 }
 async function accedi(){
   if(!loginCell.value || !loginOtp.value){ alert('MANCA NUMERO / OTP'); return; }
@@ -186,7 +208,7 @@ async function salvaPersona(){
  if(FASE==1){
    if(!nome.value || !cognome.value || !cell.value){alert("MANCA NOME / COGNOME / CELL");return;}
    let datiP1 = {};
-   datiP1["famiglia_id"] = FAMIGLIA_ID;
+   datiP1["famiglia_id"] = null;
    datiP1["ruolo"] = 'UTENTE';
    datiP1["nome"] = nome.value;
    datiP1["cognome"] = cognome.value;
@@ -618,22 +640,43 @@ def avvia_threads():
 avvia_threads()
 
 # --- PANNELLO ---
+@app.route("/pannello/blocca/<int:fid>")
+def pannello_blocca(fid):
+    if request.args.get("password") != ADMIN_PASSWORD:
+        return "PASSWORD SBAGLIATA", 403
+    con = db()
+    con.execute("UPDATE famiglie SET stato='BLOCCATO' WHERE id=?", (fid,))
+    con.commit(); con.close()
+    return f"BLOCCATO famiglia {fid} <br><a href='/pannello?password={ADMIN_PASSWORD}'>TORNA AL PANNELLO</a>"
+
+@app.route("/pannello/sblocca/<int:fid>")
+def pannello_sblocca(fid):
+    if request.args.get("password") != ADMIN_PASSWORD:
+        return "PASSWORD SBAGLIATA", 403
+    con = db()
+    con.execute("UPDATE famiglie SET stato='SBLOCCATO - PAGATO' WHERE id=?", (fid,))
+    con.commit(); con.close()
+    return f"SBLOCCATO famiglia {fid} <br><a href='/pannello?password={ADMIN_PASSWORD}'>TORNA AL PANNELLO</a>"
+
 @app.route("/pannello")
 def pannello():
     if request.args.get("password") != ADMIN_PASSWORD:
         return "PASSWORD SBAGLIATA", 403
     con = db()
-    righe = con.execute("""
-        SELECT p.nome, p.cognome, p.cell, p.email, f.otp, f.codice_link, f.stato, f.trial_fine
-        FROM persone p
-        LEFT JOIN famiglie f ON p.famiglia_id = f.id
-        ORDER BY p.id DESC
-    """).fetchall()
-    con.close()
-    html = "<h1>PANNELLO - ISCRITTI</h1><table border='1' cellpadding='8'><tr><th>NOME</th><th>COGNOME</th><th>CELL</th><th>EMAIL</th><th>OTP</th><th>CODICE</th><th>STATO</th><th>TRIAL FINE</th></tr>"
-    for r in righe:
-        html += f"<tr><td>{r['nome']}</td><td>{r['cognome']}</td><td>{r['cell']}</td><td>{r['email']}</td><td>{r['otp']}</td><td>{r['codice_link']}</td><td>{r['stato']}</td><td>{r['trial_fine']}</td></tr>"
+    fams = con.execute("SELECT * FROM famiglie ORDER BY id DESC").fetchall()
+    html = "<h1>PANNELLO - ISCRITTI ACCOPPIATI</h1><table border='1' cellpadding='8'><tr><th>FAMIGLIA</th><th>UTENTE 1</th><th>CELL 1</th><th>UTENTE 2</th><th>CELL 2</th><th>EMAIL</th><th>OTP</th><th>CODICE</th><th>STATO</th><th>TRIAL FINE</th><th>AZIONI</th></tr>"
+    for f in fams:
+        pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? ORDER BY id", (f["id"],)).fetchall()
+        u1 = pers[0] if len(pers) > 0 else None
+        u2 = pers[1] if len(pers) > 1 else None
+        nome1 = f"{u1['nome']} {u1['cognome']}" if u1 else "MANCA"
+        cell1 = u1["cell"] if u1 else "-"
+        nome2 = f"{u2['nome']} {u2['cognome']}" if u2 else "MANCA - SOLO 1 ISCRITTO"
+        cell2 = u2["cell"] if u2 else "-"
+        email = u1["email"] if u1 else "-"
+        html += f"<tr><td>{f['id']}</td><td>{nome1}</td><td>{cell1}</td><td>{nome2}</td><td>{cell2}</td><td>{email}</td><td>{f['otp']}</td><td>{f['codice_link']}</td><td>{f['stato']}</td><td>{f['trial_fine']}</td><td><a href='/pannello/blocca/{f['id']}?password={ADMIN_PASSWORD}'>BLOCCA</a> | <a href='/pannello/sblocca/{f['id']}?password={ADMIN_PASSWORD}'>SBLOCCA</a></td></tr>"
     html += "</table>"
+    con.close()
     return html
 
 if __name__ == "__main__":
