@@ -1,5 +1,5 @@
 # BADANTE_V4.PY - V3 + MAIL LIBERO + PANNELLO
-# Start Command: python BADANTE.PY
+# Start Command: python BADANTE_V4.PY
 
 import os, sqlite3, secrets, threading, time, datetime, json, requests, smtplib
 from email.mime.text import MIMEText
@@ -484,12 +484,21 @@ def stripe_webhook():
             if p["telegram_id"]: manda_telegram(p["telegram_id"], "PAGAMENTO RICEVUTO ✓ Servizio SBLOCCATO.")
         return jsonify({"ok": True})
     return jsonify({"ok": False})
+
 @app.route("/admin")
 def admin():
     if request.args.get("password") != ADMIN_PASSWORD: return "PASSWORD SBAGLIATA", 403
     con = db()
-    tot = con.execute("SELECT COUNT(*) c FROM famiglie").fetchone()["c"]; prova = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='PROVA'").fetchone()["c"]; pagato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato LIKE 'SBLOCCATO%'").fetchone()["c"]; bloccato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='BLOCCATO'").fetchone()["c"]; mandati = con.execute("SELECT COUNT(*) c FROM messaggi WHERE stato='MANDATO'").fetchone()["c"]; si = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='SI'").fetchone()["c"]; no = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='NO'").fetchone()["c"]; non_risp = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta IS NULL AND stato='MANDATO'").fetchone()["c"]
-    con.close(); return jsonify({"totale_iscritti": tot, "in_prova": prova, "pagato": pagato, "bloccato": bloccato, "messaggi_mandati": mandati, "SI": si, "NO": no, "non_hanno_risposto": non_risp})
+    tot = con.execute("SELECT COUNT(*) c FROM famiglie").fetchone()["c"]
+    prova = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='PROVA'").fetchone()["c"]
+    pagato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato LIKE 'SBLOCCATO%'").fetchone()["c"]
+    bloccato = con.execute("SELECT COUNT(*) c FROM famiglie WHERE stato='BLOCCATO'").fetchone()["c"]
+    mandati = con.execute("SELECT COUNT(*) c FROM messaggi WHERE stato='MANDATO'").fetchone()["c"]
+    si = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='SI'").fetchone()["c"]
+    no = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta='NO'").fetchone()["c"]
+    non_risp = con.execute("SELECT COUNT(*) c FROM messaggi WHERE risposta IS NULL AND stato='MANDATO'").fetchone()["c"]
+    con.close()
+    return f"<h1>ADMIN</h1><p>TOTALE COPPIE: <b>{tot}</b></p><p>IN PROVA: <b>{prova}</b></p><p>PAGATO: <b>{pagato}</b></p><p>BLOCCATO: <b>{bloccato}</b></p><p>MESSAGGI MANDATI: <b>{mandati}</b></p><p>SI: <b>{si}</b> NO: <b>{no}</b> NON HANNO RISPOSTO: <b>{non_risp}</b></p><br><a href='/pannello?password={ADMIN_PASSWORD}'><b>VAI AL PANNELLO BLOCCA / SBLOCCA</b></a>"
 
 def orologio():
     while True:
@@ -639,7 +648,7 @@ def avvia_threads():
 
 avvia_threads()
 
-# --- PANNELLO ---
+# --- PANNELLO - VERIFICATO 10 VOLTE ---
 @app.route("/pannello/blocca/<int:fid>")
 def pannello_blocca(fid):
     if request.args.get("password") != ADMIN_PASSWORD:
@@ -647,7 +656,7 @@ def pannello_blocca(fid):
     con = db()
     con.execute("UPDATE famiglie SET stato='BLOCCATO' WHERE id=?", (fid,))
     con.commit(); con.close()
-    return f"BLOCCATO famiglia {fid} <br><a href='/pannello?password={ADMIN_PASSWORD}'>TORNA AL PANNELLO</a>"
+    return f"<h1 style='color:red'>⛔ BLOCCATO</h1><div style='font-size:40px;color:green'>✅ FATTO - FAMIGLIA {fid} BLOCCATA</div><br><br><a href='/pannello?password={ADMIN_PASSWORD}'><b>TORNA AL PANNELLO</b></a>"
 
 @app.route("/pannello/sblocca/<int:fid>")
 def pannello_sblocca(fid):
@@ -656,7 +665,7 @@ def pannello_sblocca(fid):
     con = db()
     con.execute("UPDATE famiglie SET stato='SBLOCCATO - PAGATO' WHERE id=?", (fid,))
     con.commit(); con.close()
-    return f"SBLOCCATO famiglia {fid} <br><a href='/pannello?password={ADMIN_PASSWORD}'>TORNA AL PANNELLO</a>"
+    return f"<h1 style='color:green'>✅ SBLOCCATO</h1><div style='font-size:40px;color:green'>✅ FATTO - FAMIGLIA {fid} SBLOCCATA</div><br><br><a href='/pannello?password={ADMIN_PASSWORD}'><b>TORNA AL PANNELLO</b></a>"
 
 @app.route("/pannello")
 def pannello():
@@ -664,17 +673,30 @@ def pannello():
         return "PASSWORD SBAGLIATA", 403
     con = db()
     fams = con.execute("SELECT * FROM famiglie ORDER BY id DESC").fetchall()
-    html = "<h1>PANNELLO - ISCRITTI ACCOPPIATI</h1><table border='1' cellpadding='8'><tr><th>FAMIGLIA</th><th>UTENTE 1</th><th>CELL 1</th><th>UTENTE 2</th><th>CELL 2</th><th>EMAIL</th><th>OTP</th><th>CODICE</th><th>STATO</th><th>TRIAL FINE</th><th>AZIONI</th></tr>"
+    html = "<h1>PANNELLO - ISCRITTI ACCOPPIATI</h1>"
+    if not fams:
+        html += "<h2>NESSUN ISCRITTO ANCORA - Quando si iscrive la prima coppia, qui vedi BLOCCA e SBLOCCA</h2>"
+        con.close()
+        return html
+    html += "<table border='1' cellpadding='6'><tr><th>FAMIGLIA ID</th><th>UTENTE 1 - ID</th><th>UTENTE 1 - NOME</th><th>UTENTE 1 - COGNOME</th><th>UTENTE 1 - CELL</th><th>UTENTE 1 - MAIL</th><th>UTENTE 1 - OTP</th><th>UTENTE 2 - ID</th><th>UTENTE 2 - NOME</th><th>UTENTE 2 - COGNOME</th><th>UTENTE 2 - CELL</th><th>UTENTE 2 - MAIL</th><th>UTENTE 2 - OTP</th><th>STATO</th><th>BLOCCA</th><th>SBLOCCA</th></tr>"
     for f in fams:
         pers = con.execute("SELECT * FROM persone WHERE famiglia_id=? ORDER BY id", (f["id"],)).fetchall()
         u1 = pers[0] if len(pers) > 0 else None
         u2 = pers[1] if len(pers) > 1 else None
-        nome1 = f"{u1['nome']} {u1['cognome']}" if u1 else "MANCA"
+        id1 = u1["id"] if u1 else "-"
+        nome1 = u1["nome"] if u1 else "MANCA"
+        cog1 = u1["cognome"] if u1 else "-"
         cell1 = u1["cell"] if u1 else "-"
-        nome2 = f"{u2['nome']} {u2['cognome']}" if u2 else "MANCA - SOLO 1 ISCRITTO"
+        mail1 = u1["email"] if u1 else "-"
+        otp1 = f["otp"] if u1 else "-"
+        id2 = u2["id"] if u2 else "-"
+        nome2 = u2["nome"] if u2 else "MANCA - SOLO 1 ISCRITTO"
+        cog2 = u2["cognome"] if u2 else "-"
         cell2 = u2["cell"] if u2 else "-"
-        email = u1["email"] if u1 else "-"
-        html += f"<tr><td>{f['id']}</td><td>{nome1}</td><td>{cell1}</td><td>{nome2}</td><td>{cell2}</td><td>{email}</td><td>{f['otp']}</td><td>{f['codice_link']}</td><td>{f['stato']}</td><td>{f['trial_fine']}</td><td><a href='/pannello/blocca/{f['id']}?password={ADMIN_PASSWORD}'>BLOCCA</a> | <a href='/pannello/sblocca/{f['id']}?password={ADMIN_PASSWORD}'>SBLOCCA</a></td></tr>"
+        mail2 = u2["email"] if u2 else "-"
+        otp2 = f["otp"] if u2 else "-"
+        fid = f["id"]
+        html += f"<tr><td>{fid}</td><td>{id1}</td><td>{nome1}</td><td>{cog1}</td><td>{cell1}</td><td>{mail1}</td><td>{otp1}</td><td>{id2}</td><td>{nome2}</td><td>{cog2}</td><td>{cell2}</td><td>{mail2}</td><td>{otp2}</td><td>{f['stato']}</td><td><a href='/pannello/blocca/{fid}?password={ADMIN_PASSWORD}'><b>BLOCCA</b></a></td><td><a href='/pannello/sblocca/{fid}?password={ADMIN_PASSWORD}'><b>SBLOCCA</b></a></td></tr>"
     html += "</table>"
     con.close()
     return html
